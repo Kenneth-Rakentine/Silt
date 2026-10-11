@@ -1,0 +1,230 @@
+<title>Silt Articulation Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Hanken+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: an instrument rack. A listening bench and dark scope display across the top, keys beneath, then a grid of panels that wraps to one column on phones. */
+:root{
+  --bg:#dde1da; --panel:#eceee8; --ink:#1c241f; --muted:#56625a; --line:#c3cac0;
+  --accent:#1d6b80; --accent-ink:#ffffff; --sed:#94591f; --warn:#a4462b;
+  --screen:#141b18; --screen-ink:#9fb0a6; --grid:#26322d; --trace:#7fd6c6; --trace2:#e0a25e;
+  --key:#f6f7f3; --key-dark:#26302b; --key-on:#7fd6c6; --key-label:#56625a;
+  --f-display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body:"Hanken Grotesk", "Segoe UI", system-ui, sans-serif;
+  --f-mono:"JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0f1311; --panel:#171d1a; --ink:#dde5de; --muted:#8c998f; --line:#2a332e;
+  --accent:#62b8cb; --accent-ink:#0b171a; --sed:#d69a58; --warn:#e08a6a;
+  --screen:#090d0b; --screen-ink:#8ea096; --grid:#1d2723; --trace:#7fd6c6; --trace2:#e0a25e;
+  --key:#cfd6cf; --key-dark:#0d1210; --key-on:#62b8cb; --key-label:#3b4740; color-scheme:dark } }
+:root[data-theme="dark"]{
+  --bg:#0f1311; --panel:#171d1a; --ink:#dde5de; --muted:#8c998f; --line:#2a332e;
+  --accent:#62b8cb; --accent-ink:#0b171a; --sed:#d69a58; --warn:#e08a6a;
+  --screen:#090d0b; --screen-ink:#8ea096; --grid:#1d2723; --trace:#7fd6c6; --trace2:#e0a25e;
+  --key:#cfd6cf; --key-dark:#0d1210; --key-on:#62b8cb; --key-label:#3b4740; color-scheme:dark }
+html,body{min-height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:14px;padding-inline:16px;padding-block:14px 32px}
+.wrap{max-width:1320px;margin:0 auto;display:grid;gap:12px}
+header.bar{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;justify-content:space-between}
+.brand{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.brand h1{font-family:var(--f-display);font-weight:700;font-size:2rem;letter-spacing:.14em;margin:0;line-height:1}
+.brand span{font-family:var(--f-mono);font-size:.75rem;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,select,input[type=text],textarea{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:7px 12px}
+button,select{cursor:pointer}
+button:hover,select:hover{border-color:var(--muted)}
+button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+button.rec[aria-pressed="true"]{background:var(--warn);border-color:var(--warn);color:#fff}
+button:disabled{opacity:.45;cursor:not-allowed}
+.chip{font-family:var(--f-mono);font-size:.72rem;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:4px 10px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;min-width:0}
+.panel h2{font-family:var(--f-display);font-weight:500;font-size:1.05rem;margin:0 0 2px;letter-spacing:.02em}
+.panel .sub{color:var(--muted);font-size:.8rem;margin:0 0 10px;max-width:62ch}
+.rack{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))}
+.full{grid-column:1/-1}
+.row{display:grid;grid-template-columns:7.4rem minmax(0,1fr) 5.4rem;align-items:center;gap:8px;min-height:26px}
+.row .lab{font-size:.82rem}
+.row .val{font-family:var(--f-mono);font-size:.7rem;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+input[type=range]{width:100%;accent-color:var(--accent);margin:0}
+.sel{display:grid;grid-template-columns:7.4rem minmax(0,1fr);align-items:center;gap:8px;margin:2px 0 6px}
+.sel label{font-size:.82rem}
+.sel select{padding:5px 8px;font-size:.82rem;width:100%}
+.btnrow{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 8px}
+.btnrow button{padding:5px 10px;font-size:.8rem}
+/* bench */
+.bench{display:grid;gap:16px;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)}
+@media (max-width:860px){.bench{grid-template-columns:1fr}}
+.notes{display:grid;gap:8px;margin:0}
+.notes div{display:grid;grid-template-columns:7rem minmax(0,1fr);gap:10px}
+.notes dt{font-family:var(--f-mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--sed);padding-top:2px}
+.notes dd{margin:0;line-height:1.45;max-width:68ch}
+.bench .tools{display:grid;gap:10px;align-content:start}
+.tool-label{font-family:var(--f-mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.status{font-size:.8rem;color:var(--muted);min-height:1.2em}
+textarea{width:100%;min-height:90px;font-family:var(--f-mono);font-size:.72rem;resize:vertical}
+/* display */
+.display{background:var(--screen);border-color:var(--screen);color:var(--screen-ink)}
+.display h2{color:var(--trace)}
+.disp-grid{display:grid;gap:10px;grid-template-columns:minmax(0,2fr) minmax(0,1fr)}
+@media (max-width:760px){.disp-grid{grid-template-columns:1fr}}
+.screen{position:relative;border:1px solid var(--grid);border-radius:6px;overflow:hidden}
+.screen canvas{display:block;width:100%}
+.screen .tag{position:absolute;left:8px;top:6px;font-family:var(--f-mono);font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;color:var(--screen-ink)}
+.disp-top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.display select{background:var(--screen);color:var(--screen-ink);border-color:var(--grid)}
+.readout{font-family:var(--f-mono);font-size:.74rem;color:var(--screen-ink);display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-variant-numeric:tabular-nums}
+.readout b{color:var(--trace);font-weight:500}
+.col{display:flex;flex-direction:column;gap:10px}
+/* keyboard */
+.kb-top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.kb-help{color:var(--muted);font-size:.8rem;max-width:72ch;margin:0}
+.kb{position:relative;height:110px;user-select:none;touch-action:none;overflow:hidden;border-radius:6px}
+.kb .w,.kb .b{position:absolute;top:0;border:1px solid var(--line);border-radius:0 0 5px 5px;cursor:pointer}
+.kb .w{background:var(--key);height:100%}
+.kb .b{background:var(--key-dark);height:62%;z-index:2;border-color:var(--key-dark)}
+.kb .on{background:var(--key-on)!important}
+.kb .w span{position:absolute;bottom:6px;left:0;right:0;text-align:center;font-family:var(--f-mono);font-size:.65rem;color:var(--key-label)}
+/* states */
+.art-top{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));margin-bottom:12px}
+.states{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr))}
+.state{border:1px solid var(--line);border-radius:6px;padding:10px}
+.state h3,.group-label{margin:0 0 6px;font-family:var(--f-mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;font-weight:500}
+.state h3{color:var(--sed)}
+.group-label{color:var(--muted)}
+/* bands */
+.bands{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:4px;margin:6px 0 10px;justify-items:center}
+.bands input[type=range]{writing-mode:vertical-lr;direction:rtl;height:110px;width:22px}
+.bands small{font-family:var(--f-mono);font-size:.62rem;color:var(--muted)}
+footer{color:var(--muted);font-size:.78rem;max-width:90ch}
+@media (prefers-reduced-motion: reduce){*{scroll-behavior:auto}}
+</style>
+
+<div class="wrap">
+  <header class="bar">
+    <div class="brand"><h1>SILT</h1><span>Articulation lab · v2</span></div>
+    <div class="controls">
+      <label class="chip" for="preset">Patch</label>
+      <select id="preset"></select>
+      <button id="start" class="primary">Start audio</button>
+      <button id="panic">All notes off</button>
+      <span class="chip" id="midi">MIDI: not connected</span>
+    </div>
+  </header>
+
+  <section class="panel" aria-labelledby="benchTitle">
+    <div class="bench">
+      <div>
+        <h2 id="benchTitle">Listening bench</h2>
+        <p class="sub">Each numbered patch is a test built from a sound you have described. Play it, then tell me what is wrong in plain words, and which stage you heard it at.</p>
+        <dl class="notes" id="notes"></dl>
+      </div>
+      <div class="tools">
+        <div>
+          <div class="tool-label">Listen at</div>
+          <div class="sel" style="grid-template-columns:minmax(0,1fr)"><select id="listen" aria-label="Listen at">
+            <option value="0">Full output</option>
+            <option value="1">1 · Raw layers (before everything)</option>
+            <option value="2">2 · Pre-filter (after resonator and derez)</option>
+            <option value="3">3 · Voices (after filter and VCA)</option>
+            <option value="4">4 · Vocoder wet only</option>
+            <option value="5">5 · Feedback return only</option>
+            <option value="6">6 · Space wet only</option>
+          </select></div>
+          <div class="status" id="listenNote">Hearing the full output.</div>
+        </div>
+        <div>
+          <div class="tool-label">A/B compare</div>
+          <div class="btnrow">
+            <button id="storeA">Store A</button><button id="storeB">Store B</button>
+            <button id="hearA" disabled>Hear A</button><button id="hearB" disabled>Hear B</button>
+            <button id="match" aria-pressed="true">Match levels</button>
+          </div>
+          <div class="status" id="abNote">Store two versions of a sound, then flip between them. Levels are matched while you play so louder never wins.</div>
+        </div>
+        <div>
+          <div class="tool-label">Takes and patches</div>
+          <div class="btnrow">
+            <button id="rec" class="rec" aria-pressed="false">Record take</button>
+            <button id="copyPatch">Copy patch</button>
+            <button id="loadToggle" aria-expanded="false">Load patch text</button>
+          </div>
+          <div class="btnrow" style="align-items:center">
+            <input type="text" id="saveName" placeholder="Name this patch" aria-label="Patch name" style="flex:1;min-width:0;padding:5px 10px;font-size:.82rem">
+            <button id="savePatch">Save</button>
+          </div>
+          <div id="loadBox" hidden><textarea id="loadText" aria-label="Patch text to load" placeholder="Paste a patch here"></textarea><div class="btnrow"><button id="loadGo">Load</button></div></div>
+          <div class="status" id="takeNote">A take saves as a .zip with a WAV and the exact patch, so you can attach it in chat.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel display">
+    <div class="disp-top">
+      <h2>Scope</h2>
+      <div class="controls">
+        <label for="tap" style="font-size:.8rem">Watching</label>
+        <select id="tap"><option value="1">Last voice played</option><option value="0">What you hear</option><option value="2">Feedback bus</option></select>
+      </div>
+    </div>
+    <div class="disp-grid">
+      <div class="col">
+        <div class="screen"><span class="tag">Waveform · auto-scaled</span><canvas id="scope" height="190"></canvas></div>
+        <div class="screen"><span class="tag">Spectrum · 30 Hz – 16 kHz</span><canvas id="spec" height="120"></canvas></div>
+      </div>
+      <div class="col">
+        <div class="screen"><span class="tag">Layer A emitters · phase</span><canvas id="cloud" height="190"></canvas></div>
+        <div class="screen"><span class="tag">Motion trace</span><canvas id="trace" height="120"></canvas></div>
+      </div>
+    </div>
+    <div class="readout" id="readout"><span>Press <b>Start audio</b>, then play.</span></div>
+  </section>
+
+  <section class="panel">
+    <div class="kb-top">
+      <p class="kb-help">Play with the A–K row on your keyboard (W E T Y U for sharps). Z and X shift the octave. A MIDI controller works too; CC1 drives Allure.</p>
+      <div class="controls">
+        <button id="octDown" aria-label="Octave down">Oct −</button>
+        <span class="chip" id="octLabel">C3</span>
+        <button id="octUp" aria-label="Octave up">Oct +</button>
+        <button id="latch" aria-pressed="false">Latch</button>
+      </div>
+    </div>
+    <div class="kb" id="kb"></div>
+  </section>
+
+  <div class="rack">
+    <section class="panel full">
+      <h2>Articulation</h2>
+      <p class="sub">Three authored states. The voice travels Onset → Continuant while held, and Continuant → Termination on release. Authority blends the drawn path with spring physics; temperature makes the physics wander.</p>
+      <div class="art-top">
+        <div><div class="group-label">Motion</div><div id="motionA"></div></div>
+        <div><div class="group-label">Physics</div><div id="motionB"></div></div>
+        <div><div class="group-label">Playing</div><div id="playing"></div></div>
+      </div>
+      <div class="states" id="states"></div>
+    </section>
+    <section class="panel"><h2>Layer A</h2><p class="sub">Pulsar emitters. With Formant 1, Cycles 1 and a rectangular window it is a plain band-limited oscillator; raise Formant or narrow the window and it becomes pulses with a formant.</p><div id="layerA"></div></section>
+    <section class="panel"><h2>Layer B</h2><p class="sub">A second layer for detuned beating, ring mod, FM into A, or hard sync to A.</p><div id="layerB"></div></section>
+    <section class="panel"><h2>Voice character</h2><p class="sub">Mixer, digital resolution, resonator and analog drift. Ring is set per state.</p><div id="voiceC"></div></section>
+    <section class="panel"><h2>Filter and VCA</h2><p class="sub">Runs at twice the sample rate with the folder, so drive and resonance stay clean at the top. Cutoff is set per state.</p><div id="filterC"></div></section>
+    <section class="panel"><h2>Schaeffer macros</h2><p class="sub">Mass moves formants, filter and vocoder bands together. Grain trades smooth tone for particles. Allure adds motion everywhere.</p><div id="macros"></div></section>
+    <section class="panel">
+      <h2>Material vocoder</h2><p class="sub">Body is the material that gets reshaped. Skin is the sound whose spectral motion is pressed onto it. Fixed skin uses only the band levels, which is the GRAINS move.</p>
+      <div id="vocTop"></div>
+      <div class="btnrow" id="bandPresets"></div>
+      <div class="bands" id="bands"></div>
+      <div id="vocoder"></div>
+    </section>
+    <section class="panel"><h2>Feedback path</h2><p class="sub">Delay, filter and saturator inside the loop. Each state sets how much of the voice is sent in.</p><div id="feedback"></div></section>
+    <section class="panel"><h2>Space</h2><p class="sub">An 8-line diffuse room so sounds have depth instead of sitting flat.</p><div id="space"></div></section>
+  </div>
+  <footer>Double-click a slider to reset it to the patch value. Saved patches live in this browser only; use Copy patch to send one to me.</footer>
+</div>
+
+<script type="text/plain" id="dsp">/*ENGINE*/</script>
+<script>/*PATCHES*/</script>
+<script>/*UI*/</script>

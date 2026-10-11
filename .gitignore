@@ -1,0 +1,7 @@
+build/
+out/
+cmp/
+*.user
+.vs/
+lab/silt-lab.html
+lab/out/

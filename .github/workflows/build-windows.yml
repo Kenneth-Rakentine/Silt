@@ -1,0 +1,53 @@
+name: Build Windows app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # lets the job publish the "latest" download
+
+concurrency:
+  group: windows-build
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (fetches JUCE 8.0.4)
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build standalone app and VST3
+        run: cmake --build build --config Release --target Silt_Standalone Silt_VST3 --parallel
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist/Silt
+          cp build/Silt_artefacts/Release/Standalone/Silt.exe dist/Silt/
+          cp -r build/Silt_artefacts/Release/VST3/Silt.vst3 dist/Silt/
+          cp README.md dist/Silt/README.md
+          cd dist && 7z a -tzip ../Silt-windows.zip Silt > /dev/null
+
+      - name: Keep the build for 14 days (Actions tab)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Silt-windows
+          path: Silt-windows.zip
+          retention-days: 14
+
+      - name: Publish as the "latest" download
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest Silt-windows.zip --prerelease --target "$GITHUB_SHA" \
+            --title "Silt (latest build)" \
+            --notes "Built from ${GITHUB_SHA::7}. Unzip, run Silt.exe. Windows may warn that the app is unrecognised: choose More info, then Run anyway."
