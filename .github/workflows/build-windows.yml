@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Configure (fetches JUCE 8.0.4)
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+        run: cmake -S . -B build -A x64
 
       - name: Build standalone app and VST3
         run: cmake --build build --config Release --target Silt_Standalone Silt_VST3 --parallel

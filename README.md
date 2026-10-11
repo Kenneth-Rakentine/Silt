@@ -45,7 +45,7 @@ The computer keys work wherever you last clicked, except while you are typing a 
 
 ## Building it yourself
 
-Needs CMake 3.22+ and Visual Studio 2022 (or GCC/Clang on Linux). JUCE 8.0.4 is downloaded automatically.
+Needs CMake 3.22+ and Visual Studio 2022 or newer (or GCC/Clang on Linux). JUCE 8.0.4 is downloaded automatically.
 
 ```
 cmake -S . -B build
