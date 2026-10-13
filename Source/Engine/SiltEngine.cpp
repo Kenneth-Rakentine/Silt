@@ -161,49 +161,73 @@ Engine::Engine() { initStatic(); buildTables(); prepare(48000); }
 
 void Engine::prepare(double sampleRate) {
     sr = sampleRate;
-    dlen = int(std::ceil(sr * 1.6)); dbuf.assign(dlen, 0.f); dw = 0; dtS = 0.2 * sr; fbF = SVF(); dcx = dcy = 0;
+    for (auto& b : bus) b.prepare(sr);
+    for (double& x : busPrev) x = 0;
+    std::fill(excCur, excCur + CHUNK, 0.f); std::fill(excNext, excNext + CHUNK, 0.f);
+    prevWet = prevSpace = prevOut = 0;
     for (int b = 0; b < 8; ++b) { anS[b] = SVF(); syL[b] = SVF(); syR[b] = SVF(); env[b] = 0; }
     scr = 0; vDry = vWet = 1e-4; vGain = 1;
     dustL[0].set(3000, 3, sr); dustL[1].set(6500, 2, sr); dustR[0].set(3300, 3, sr); dustR[1].set(7100, 2, sr);
     popL.set(420, 2, sr); popR.set(380, 2, sr);
     for (auto& d : drops) d = Drop();
-    const double base[8] = { 29.7, 37.1, 41.1, 43.7, 53.3, 59.9, 67.1, 73.9 };
-    for (int q = 0; q < 8; ++q) { fdn[q].buf.assign(size_t(std::ceil(sr * base[q] / 1000 * 2.2) + 16), 0.f); fdn[q].w = 0; fdn[q].len = 0; fdn[q].base = base[q]; fdn[q].lp = 0; fdn[q].g = 0; }
+    const double base8[8] = { 29.7, 37.1, 41.1, 43.7, 53.3, 59.9, 67.1, 73.9 };
+    for (int q = 0; q < 8; ++q) { fdn[q].buf.assign(size_t(std::ceil(sr * base8[q] / 1000 * 2.2) + 16), 0.f); fdn[q].w = 0; fdn[q].len = 0; fdn[q].base = base8[q]; fdn[q].lp = 0; fdn[q].g = 0; }
     const int nl[4] = { 142, 107, 379, 277 }, nr[4] = { 151, 113, 367, 293 };
     for (int i = 0; i < 4; ++i) { apL[i].b.assign(size_t(std::ceil(nl[i] * sr / 48000)), 0.f); apL[i].i = 0; apR[i].b.assign(size_t(std::ceil(nr[i] * sr / 48000)), 0.f); apR[i].i = 0; }
     modPh = 0; agc = 1; agcR = 1e-4; outR = 0; vizC = 0; dcL0 = dcL1 = dcR0 = dcR1 = 0;
+    clock.reset(); seq.reset(); sed = Sediment(); regen.prepare(sr); cuts.prepare(sr); catchSec.prepare(sr); outEnergy = 0;
     for (auto& v : voices) v.active = false;
     lastV = nullptr;
 }
 
 void Engine::noteOn(int note, float vel) {
-    if (!P) return;
-    const int poly = clampv(int(P->poly), 1, MAXV);
+    if (!base) return;
+    const Params* Pn = base;
+    const int poly = clampv(int(Pn->poly), 1, MAXV);
     Voice* v = nullptr; for (int i = 0; i < poly; ++i) if (!voices[i].active) { v = &voices[i]; break; }
     if (!v) { v = &voices[0]; for (int i = 1; i < poly; ++i) if (voices[i].serial < v->serial) v = &voices[i]; }
     const bool wasActive = v->active;
     v->active = true; v->gate = true; v->note = note; v->freq = 440 * std::pow(2.0, (note - 69) / 12.0); v->vel = vel; v->serial = ++serial;
+    v->vrand = rng.next() * 2 - 1;
     const double* S0 = Sc[0];
     for (int k = 0; k < NK; ++k) { const double st = wasActive ? v->cur[k] : S0[k]; v->p[k] = st; v->s[k] = st; v->v[k] = 0; v->n[k] = 0; v->cur[k] = st; v->from[k] = st; }
     if (!wasActive) { v->from[K_LEVEL] = 0; v->p[K_LEVEL] = 0; v->s[K_LEVEL] = 0; v->cur[K_LEVEL] = 0; v->lv0 = v->lv1 = 0;
         v->A.reset(rng); v->B.reset(rng); std::memset(v->lad, 0, sizeof(v->lad)); v->svf[0].reset(); v->svf[1].reset();
-        for (int i = 0; i < 3; ++i) v->ry1[i] = v->ry2[i] = 0; }
-    v->toIdx = 0; v->T = std::max(0.0005, double(P->atk)); v->t = 0; v->stage = 0; v->tail = 1; v->strike = 1;
-    lastV = v;
+        for (int i = 0; i < 3; ++i) v->ry1[i] = v->ry2[i] = 0;
+        for (double& o : v->stOff) o = 0; }
+    v->toIdx = 0; v->T = std::max(0.0005, double(Pn->atk)); v->t = 0; v->stage = 0; v->tail = 1; v->strike = 1;
+    lastV = v; ++notesThisChunk;
 }
 
 void Engine::noteOff(int note) {
     for (auto& v : voices) if (v.active && v.gate && v.note == note) {
-        v.gate = false; std::memcpy(v.from, v.p, sizeof(v.p)); v.toIdx = 2; v.T = std::max(0.0005, P ? double(P->rel) : 0.5); v.t = 0; v.stage = 2; }
+        v.gate = false; std::memcpy(v.from, v.p, sizeof(v.p)); v.toIdx = 2; v.T = std::max(0.0005, base ? double(base->rel) : 0.5); v.t = 0; v.stage = 2; }
 }
 
-void Engine::panic() { for (auto& v : voices) v.active = false; std::fill(dbuf.begin(), dbuf.end(), 0.f); fbF.reset(); for (auto& f : fdn) std::fill(f.buf.begin(), f.buf.end(), 0.f); }
+void Engine::keyOn(int note, float vel) {
+    if (base && base->seqOn > 0.5f && base->seqKeys < 0.5f) { root = note; return; }   // the sequence is transposed, not played over
+    noteOn(note, vel);
+}
+void Engine::keyOff(int note) {
+    if (base && base->seqOn > 0.5f && base->seqKeys < 0.5f) return;
+    noteOff(note);
+}
+
+void Engine::panic() {
+    for (auto& v : voices) v.active = false;
+    for (auto& b : bus) b.reset();
+    for (auto& f : fdn) std::fill(f.buf.begin(), f.buf.end(), 0.f);
+    regen.reset(); cuts.reset();
+    std::fill(excNext, excNext + CHUNK, 0.f);
+}
 
 void Engine::panicDSP() {
-    std::fill(dbuf.begin(), dbuf.end(), 0.f); fbF.reset();
+    for (auto& b : bus) b.reset();
     for (auto& f : fdn) { std::fill(f.buf.begin(), f.buf.end(), 0.f); f.lp = 0; }
     for (int b = 0; b < 8; ++b) { syL[b].reset(); syR[b].reset(); anS[b].reset(); }
     for (auto& v : voices) { std::memset(v.lad, 0, sizeof(v.lad)); v.svf[0].reset(); v.svf[1].reset(); for (int i = 0; i < 3; ++i) v.ry1[i] = v.ry2[i] = 0; }
+    regen.reset(); cuts.reset();
+    std::fill(excNext, excNext + CHUNK, 0.f);
 }
 
 void Engine::ctrlLayer(Voice& v, Layer& L, const LayerParams& lp, double f0, double dt) {
@@ -256,9 +280,10 @@ void Engine::ctrlVoice(Voice& v, double dt) {
         v.n[k] += (rng.gauss() * temp * SPAN[k] * 0.3 - v.n[k]) * nr;
         const double a = kS * (dest[k] + v.n[k] - v.s[k]) - cc * v.v[k]; v.v[k] += a * dt; v.s[k] += v.v[k] * dt;
         if (!(v.s[k] == v.s[k]) || std::abs(v.s[k]) > 1e4) { v.s[k] = v.p[k]; v.v[k] = 0; }
-        v.cur[k] = clampv(v.p[k] + A * (v.s[k] - v.p[k]), LO[k], HI[k]);
+        v.cur[k] = clampv(v.p[k] + A * (v.s[k] - v.p[k]) + v.stOff[k], LO[k], HI[k]);
     }
-    if (v.stage == 4) { v.tail *= std::exp(-dt / std::max(0.02, Pp.rel * 0.35)); if (v.tail < 1e-4 || v.cur[K_LEVEL] < 1e-5) { v.active = false; return; } }
+    const double tailTc = Pp.tail > 0.001f ? Pp.tail / 6.9 : Pp.rel * 0.35;
+    if (v.stage == 4) { v.tail *= std::exp(-dt / std::max(0.02, tailTc)); if (v.tail < 1e-4 || v.cur[K_LEVEL] < 1e-5) { v.active = false; return; } }
     const double dr = Pp.drift, ds = std::sqrt(dt) * 3;
     v.dP = clampv(v.dP + rng.gauss() * ds, -1.0, 1.0); v.dC = clampv(v.dC + rng.gauss() * ds, -1.0, 1.0);
     v.dPv += (v.dP * dr * 7 - v.dPv) * std::min(1.0, dt * 3); v.dCv += (v.dC * dr * 0.25 - v.dCv) * std::min(1.0, dt * 3);
@@ -270,7 +295,7 @@ void Engine::ctrlVoice(Voice& v, double dt) {
         v.rb1[i] = 2 * r * std::cos(w); v.rb2[i] = -r * r; v.rg[i] = (1 - r) * 2.5 * gn[i]; }
     v.res = cur[K_RES]; v.ring = cur[K_RING]; v.fold = clampv(cur[K_FOLD], 0.0, 1.0); v.fbs = cur[K_FB];
     const double vc = (v.vel - 0.7) * Pp.velCut * 3;
-    const double cut = clampv(std::pow(2.0, cur[K_CUT] + Pp.keytrack * (v.note - 60) / 12.0 + vc + v.dCv + Pp.mass * 0.8), 20.0, 21000.0);
+    const double cut = clampv(std::pow(2.0, cur[K_CUT] + Pp.keytrack * (v.note - 60) / 12.0 + vc + v.dCv + Pp.mass * 0.8 + Pp.fCut), 20.0, 21000.0);
     v.g0 = v.g1; v.g1 = std::tan(PI * std::min(cut, sr * 0.9) / (2 * sr));
     v.lv0 = v.lv1; v.lv1 = cur[K_LEVEL] * (1 - Pp.velAmp + Pp.velAmp * v.vel) * v.tail;
 }
@@ -343,6 +368,7 @@ void Engine::renderVoice(Voice& v, int off, int m) {
         v.bPrev = (bLs + bRs) * 0.5;
         double xL = la * aL + lb * bLs + ring * aL * bLs * 3.2, xR = la * aR + lb * bRs + ring * aR * bRs * 3.2;
         t1L[off + j] += float(xL * lv); t1R[off + j] += float(xR * lv);
+        { const double ex = excCur[off + j]; xL += ex; xR += ex; }   // feedback buses returning into the voices
         if (res > 0.001) { double ex = (xL + xR) * 0.5; if (v.strike > 0) { ex += (rng.next() * 2 - 1) * v.strike * Pp.strike * 2; v.strike *= 0.92; if (v.strike < 1e-3) v.strike = 0; }
             double rs = 0; for (int i = 0; i < 3; ++i) { const double y = v.rb1[i] * v.ry1[i] + v.rb2[i] * v.ry2[i] + v.rg[i] * ex; v.ry2[i] = v.ry1[i]; v.ry1[i] = y; rs += y; }
             rs = ft(rs * 0.8) * 1.25; xL = xL * (1 - res) + rs * res; xR = xR * (1 - res) + rs * res; }
@@ -378,7 +404,7 @@ void Engine::renderVoice(Voice& v, int off, int m) {
 }
 
 void Engine::setControls(const Params& Pin, const StateSet& S) {
-    P = &Pin;
+    P = &Pin; base = &Pin;
     for (int i = 0; i < 3; ++i) for (int k = 0; k < NK; ++k) Sc[i][k] = k == K_CUT ? std::log2(clampv(double(S[i][k]), 20.0, 20000.0)) : double(S[i][k]);
 }
 
@@ -390,43 +416,149 @@ void Engine::process(const Params& Pin, const StateSet& S, float* L, float* R, f
     }
 }
 
+bool Engine::anyMods() const {
+    for (auto& m : base->mod) if (int(m.src) != 0 && int(m.dst) != 0 && m.amt != 0) return true;
+    return false;
+}
+
+// Adds every matrix slot to `out` (a copy of the base parameters). Articulation destinations go to
+// stateOff (per voice) and are skipped when stateOff is null.
+void Engine::applyMods(Params& out, const float* sv, double* stateOff) const {
+    const auto& dests = modDests();
+    for (auto& m : base->mod) {
+        const int si = int(m.src), di = int(m.dst);
+        if (si <= 0 || si >= MS_COUNT || di <= 0 || di >= (int) dests.size() || m.amt == 0) continue;
+        const double v = double(sv[si]) * m.amt;
+        const ModDest& d = dests[(size_t) di];
+        if (d.stateKey >= 0) { if (stateOff) stateOff[d.stateKey] += v * (HI[d.stateKey] - LO[d.stateKey]); continue; }
+        float* f = reinterpret_cast<float*>(reinterpret_cast<char*>(&out) + d.offset);
+        double x = *f;
+        if (d.log) x *= std::pow(double(d.max) / d.min, v); else x += v * (d.max - d.min);
+        *f = float(clampv(x, double(d.min), double(d.max)));
+    }
+}
+
 void Engine::renderChunk(int n, float* L, float* R, float* tap) {
-    const Params& Pp = *P;
+    const Params& B0 = *base;
     std::fill(bL, bL + CHUNK, 0.f); std::fill(bR, bR + CHUNK, 0.f); std::fill(fbB, fbB + CHUNK, 0.f);
     std::fill(t1L, t1L + CHUNK, 0.f); std::fill(t1R, t1R + CHUNK, 0.f); std::fill(t2L, t2L + CHUNK, 0.f); std::fill(t2R, t2R + CHUNK, 0.f); std::fill(vt, vt + CHUNK, 0.f);
+    std::copy(excNext, excNext + CHUNK, excCur); std::fill(excNext, excNext + CHUNK, 0.f);
     mask_ = 0; scat_ = 0;
+    const bool mods = anyMods();
+    const int notesBefore = 0;
     for (int off = 0; off < n; off += CTRL) {
         const int m = std::min(CTRL, n - off); const double dt = m / sr;
-        for (auto& v : voices) { if (!v.active) continue; ctrlVoice(v, dt); if (!v.active) continue;
-            mask_ = clampv(v.cur[K_MASK] + Pp.grainM * 0.3, 0.0, 0.98); scat_ = clampv(v.cur[K_SCAT] + Pp.allure * 0.4, 0.0, 1.0);
-            renderVoice(v, off, m); }
+        // ---- global modulation sources ----
+        Pg = B0; if (mods) applyMods(Pg, src, nullptr);
+        const int pulses = clock.tick(Pg, m, sr, mrng);
+        src[MS_LFO1] = lfo1.tick(Pg.lfo1Rate, int(Pg.lfo1Shape), dt, mrng);
+        src[MS_LFO2] = lfo2.tick(Pg.lfo2Rate, int(Pg.lfo2Shape), dt, mrng);
+        src[MS_CLKA] = clock.valA; src[MS_CLKB] = clock.valB; src[MS_PULSE] = clock.env; src[MS_RAND] = clock.rnd;
+        src[MS_DUST] = dmod.tick(Pg.dustModRate, Pg.dustModDecay, dt, mrng);
+        src[MS_WHEEL] = wheel;
+        src[MS_SED] = sed.level; src[MS_ERO] = sed.erosion;
+        src[MS_FB1] = float(std::min(1.0, bus[0].env * 3)); src[MS_FB2] = float(std::min(1.0, bus[1].env * 3)); src[MS_FB3] = float(std::min(1.0, bus[2].env * 3));
+        src[MS_OUT] = float(std::min(1.0, std::sqrt(outEnergy) * 4)); src[MS_CATCH] = std::min(1.f, catchSec.level * 4);
+        // ---- sequencer ----
+        SeqEvent ev[16]; int nev = 0;
+        seq.tick(Pg, pulses, clock.pulsePeriod, dt, root, mrng, ev, nev);
+        for (int e = 0; e < nev; ++e) { if (ev[e].on) noteOn(ev[e].note, ev[e].vel); else noteOff(ev[e].note); }
+        src[MS_SEQVAL] = seq.value; src[MS_SEQGATE] = seq.gate;
+        // ---- microcut triggers ----
+        if (Pg.mcOn > 0.5f) {
+            const int trig = int(Pg.mcTrig);
+            bool fire = false;
+            if (trig == 0 || trig == 2) for (int pz = 0; pz < pulses; ++pz) if (mrng.next() < Pg.mcProb) fire = true;
+            if ((trig == 1 || trig == 2) && seq.cutTrigger) fire = true;
+            if (trig == 3 && mrng.next() < Pg.mcProb * 8 * dt) fire = true;
+            if (fire) cuts.trigger(Pg, mrng.next(), mrng.next());
+        }
+        // ---- erosion acts on every voice ----
+        double ero[NK] {};
+        const double E = sed.erosion * Pg.eroDepth;
+        if (E > 1e-4) { const int t = int(Pg.eroTarget);
+            if (t == 0) ero[K_CUT] = -E * 4; else if (t == 1) { ero[K_MASK] = E * 0.8; ero[K_SCAT] = E * 0.4; } else ero[K_LEVEL] = -E * 0.6; }
+        // ---- voices ----
+        for (auto& v : voices) {
+            if (!v.active) continue;
+            for (int k = 0; k < NK; ++k) v.stOff[k] = ero[k];
+            if (mods) {
+                src[MS_VEL] = float(v.vel); src[MS_NOTE] = float((v.note - 60) / 36.0); src[MS_VLEVEL] = float(v.cur[K_LEVEL] / 1.3);
+                src[MS_VRAND] = v.vrand; src[MS_COH] = float(v.A.R);
+                v.pm = B0;
+                applyMods(v.pm, src, v.stOff);
+                P = &v.pm;
+            } else P = base;
+            ctrlVoice(v, dt);
+            if (v.active) {
+                mask_ = clampv(v.cur[K_MASK] + P->grainM * 0.3, 0.0, 0.98); scat_ = clampv(v.cur[K_SCAT] + P->allure * 0.4, 0.0, 1.0);
+                renderVoice(v, off, m);
+            }
+            P = base;
+        }
+        if (lastV) { src[MS_VEL] = float(lastV->vel); src[MS_NOTE] = float((lastV->note - 60) / 36.0); src[MS_VLEVEL] = float(lastV->cur[K_LEVEL] / 1.3); src[MS_VRAND] = lastV->vrand; src[MS_COH] = float(lastV->A.R); }
+    }
+    const Params& G = Pg;
+    // ---- memory: sediment and erosion ----
+    {
+        const int newNotes = notesThisChunk - notesBefore; notesThisChunk = 0;
+        double actv = 0; const int ss = int(G.sedSrc);
+        if (ss == 0) actv = std::min(1.0, std::sqrt(outEnergy) * 5);
+        else if (ss == 1) actv = newNotes * 0.15 / (n / sr);
+        else if (ss == 2) { double lv = 0; for (auto& v : voices) if (v.active) lv = std::max(lv, v.cur[K_LEVEL]); actv = lv; }
+        else actv = std::min(1.0, (bus[0].env + bus[1].env + bus[2].env) * 3);
+        sed.tick(G, actv, newNotes, outEnergy, n / sr);
     }
     // vocoder setup
-    const bool vocOn = Pp.vocOn > 0.5f; const int body = int(Pp.vocBody), skin = int(Pp.vocSkin); const double spread = Pp.vocSpread, sh = std::pow(2.0, Pp.vocShift + Pp.mass * 0.6), vq = Pp.vocQ;
+    const bool vocOn = G.vocOn > 0.5f; const int body = int(G.vocBody), skin = int(G.vocSkin); const double spread = G.vocSpread, sh = std::pow(2.0, G.vocShift + G.mass * 0.6), vq = G.vocQ;
     if (vocOn) for (int b = 0; b < 8; ++b) { const double fc = 1000 * std::pow(2.0, (b - 3.5) * 0.85 * spread); anS[b].set(fc, vq, sr); syL[b].set(fc * sh, vq, sr); syR[b].set(fc * sh, vq, sr); }
-    const double resp = Pp.vocResp, atk = 1 - std::exp(-1 / ((0.001 + resp * 0.04) * sr)), relc = 1 - std::exp(-1 / ((0.02 + resp * 0.7) * sr));
-    const double dep = std::min(1.0, double(Pp.scrapeDepth) + Pp.allure * 0.4), dustP = Pp.dustRate / sr, dropP = Pp.dropRate / sr;
+    const double resp = G.vocResp, atk = 1 - std::exp(-1 / ((0.001 + resp * 0.04) * sr)), relc = 1 - std::exp(-1 / ((0.02 + resp * 0.7) * sr));
+    const double dep = std::min(1.0, double(G.scrapeDepth) + G.allure * 0.4), dustP = G.dustRate / sr, dropP = G.dropRate / sr;
     double bandNorm[8]; for (int b = 0; b < 8; ++b) bandNorm[b] = body == 1 ? std::sqrt(1000 / (1000 * std::pow(2.0, (b - 3.5) * 0.85 * spread))) * 0.5 : 1;
     // feedback setup
-    fbF.set(Pp.fbCut, Pp.fbQ, sr);
-    const int len = dlen; const double tgt = clampv(Pp.fbTime / 1000.0 * sr, 2.0, len - 4.0), t3 = ft(std::max(0.3, double(Pp.fbDrive)));
-    const int fbType = int(Pp.fbType);
+    bool busOn[NBUS]; for (int b = 0; b < NBUS; ++b) { busOn[b] = G.bus[b].on > 0.5f; if (busOn[b]) bus[b].setup(G.bus[b], sr); }
+    // memory setup
+    const bool rgOn = G.rgOn > 0.5f, mcOn = G.mcOn > 0.5f; if (rgOn) regen.setup(G);
     // space setup
-    const double size = Pp.spSize, rt = std::max(0.1, double(Pp.spDecay)), damp = 1 - std::exp(-TAU * (800 + Pp.spTone * 14000) / sr);
+    const double size = G.spSize, rt = std::max(0.1, double(G.spDecay)), damp = 1 - std::exp(-TAU * (800 + G.spTone * 14000) / sr);
     for (auto& f : fdn) { f.len = std::min(int(f.buf.size()) - 12, int(std::floor(f.base * size * sr / 1000))); f.g = std::pow(10.0, -3.0 * f.len / (rt * sr)); }
-    const double spMix = Pp.spMix; const int listen = int(Pp.listen);
+    const double spMix = G.spMix; const int listen = int(G.listen);
     double sumSq = 0; int act = 0; for (auto& v : voices) if (v.active) ++act;
     double fo[8];
     for (int i = 0; i < n; ++i) {
         double l = bL[i], r = bR[i];
-        // feedback loop
-        dtS += (tgt - dtS) * 0.0008; double rp = dw - dtS; while (rp < 0) rp += len;
-        const int i0 = int(rp); const double frc = rp - i0, dly = dbuf[i0] * (1 - frc) + dbuf[(i0 + 1) % len] * frc;
-        double rp2 = dw - dtS * 1.07; while (rp2 < 0) rp2 += len; const int j0 = int(rp2); const double dly2 = dbuf[j0] + (rp2 - j0) * (dbuf[(j0 + 1) % len] - dbuf[j0]);
-        fbF.tick(dly); const double ffv = fbType == 0 ? fbF.lp : fbType == 1 ? fbF.bp * fbF.k : fbF.hp;
-        const double y = ft(ffv * Pp.fbDrive) / t3; const double dc = y - dcx + 0.996 * dcy; dcx = y; dcy = dc;
-        dbuf[dw] = float(ft(fbB[i] + dc * Pp.fbRegen)); dw = (dw + 1) % len;
-        const double fL = dc * Pp.fbMix, fR = (0.6 * dc + 0.4 * dly2) * Pp.fbMix; l += fL; r += fR;
+        // ---- feedback network ----
+        double fL = 0, fR = 0, dc0 = 0, curB[NBUS] {};
+        for (int b = 0; b < NBUS; ++b) {
+            if (!busOn[b]) { curB[b] = busPrev[b] * 0.999; continue; }
+            const BusParams& Bp = G.bus[b];
+            double x;
+            switch (int(Bp.tap)) {
+                case 0: x = fbB[i]; break;
+                case 1: x = 0.5 * (t1L[i] + t1R[i]); break;
+                case 2: x = 0.5 * (t2L[i] + t2R[i]); break;
+                case 3: x = 0.5 * (bL[i] + bR[i]); break;
+                case 4: x = prevWet; break;
+                case 5: x = prevSpace; break;
+                case 6: x = busPrev[0]; break;
+                case 7: x = busPrev[1]; break;
+                case 8: x = busPrev[2]; break;
+                default: x = prevOut; break;
+            }
+            const double d = bus[b].tick(x * Bp.send, Bp);
+            curB[b] = d; if (b == 0) dc0 = d;
+            const double w = Bp.width, rl = d * Bp.mix, rr = ((1 - w) * d + w * bus[b].dly2) * Bp.mix;
+            const int dest = int(Bp.dest);
+            if (dest != 1) { l += rl; r += rr; }
+            if (dest != 0) excNext[i] += float(0.5 * (rl + rr));
+            fL += rl; fR += rr;
+        }
+        for (int b = 0; b < NBUS; ++b) busPrev[b] = curB[b];
+        const double dc = dc0;
+        lsDC[i] = float(dc0); lsFL[i] = float(fL); lsFR[i] = float(fR);
+        // ---- regeneration memory ----
+        double mL = 0, mR = 0;
+        if (rgOn) { regen.tick(l, r, G, mL, mR); l += mL; r += mR; }
         // material vocoder
         double wL = 0, wR = 0;
         if (vocOn) {
@@ -438,24 +570,29 @@ void Engine::renderChunk(int n, float* L, float* R, float* tap) {
                 dustL[0].tick(iL); dustL[1].tick(iL); dustR[0].tick(iR); dustR[1].tick(iR); popL.tick(pp * (1 - pan)); popR.tick(pp * pan);
                 bdL = dustL[0].bp + dustL[1].bp + iL * 0.3 + popL.bp; bdR = dustR[0].bp + dustR[1].bp + iR * 0.3 + popR.bp; }
             else if (body == 3) {
-                if (rng.next() < dropP) for (auto& d : drops) if (!d.on) { d.on = true; d.t = 0; d.ph = 0; d.f0 = (300 + rng.next() * 2200) * Pp.dropPitch; d.ch = 0.6 + rng.next() * 2; d.tc = 0.004 + rng.next() * 0.01; d.td = 0.006 + rng.next() * 0.02; d.a = 0.4 + rng.next() * 0.6; const double pn = rng.next(); d.pl = std::cos(pn * 1.5708); d.pr = std::sin(pn * 1.5708); break; }
+                if (rng.next() < dropP) for (auto& d : drops) if (!d.on) { d.on = true; d.t = 0; d.ph = 0; d.f0 = (300 + rng.next() * 2200) * G.dropPitch; d.ch = 0.6 + rng.next() * 2; d.tc = 0.004 + rng.next() * 0.01; d.td = 0.006 + rng.next() * 0.02; d.a = 0.4 + rng.next() * 0.6; const double pn = rng.next(); d.pl = std::cos(pn * 1.5708); d.pr = std::sin(pn * 1.5708); break; }
                 for (auto& d : drops) { if (!d.on) continue; d.t += 1 / sr; const double f = d.f0 * (1 + d.ch * (1 - std::exp(-d.t / d.tc))); d.ph += f / sr; const double en = d.a * std::exp(-d.t / d.td) * std::min(1.0, d.t * 4000);
                     const double s = std::sin(TAU * d.ph) * en; bdL += s * d.pl; bdR += s * d.pr; if (d.t > d.td * 7) d.on = false; } }
             else { bdL = fL * 2; bdR = fR * 2; }
             const double sk = skin == 0 ? (l + r) * 0.5 : skin == 1 ? dc : 0;
-            scr += Pp.scrapeRate / sr; if (scr > 1) scr -= 1;
+            scr += G.scrapeRate / sr; if (scr > 1) scr -= 1;
             for (int b = 0; b < 8; ++b) {
                 double e = 1; if (skin != 2) { SVF& an = anS[b]; an.tick(sk); const double a = std::abs(an.bp) * 4; const double ev = env[b]; env[b] = ev + (a - ev) * (a > ev ? atk : relc); e = env[b]; }
-                const double lvb = Pp.bands[b] * (dep > 0 ? 1 - dep * 0.5 * (1 + std::sin(TAU * (scr + b / 8.0))) : 1);
+                const double lvb = G.bands[b] * (dep > 0 ? 1 - dep * 0.5 * (1 + std::sin(TAU * (scr + b / 8.0))) : 1);
                 const double g = e * lvb * bandNorm[b];
                 syL[b].tick(bdL); syR[b].tick(bdR); wL += syL[b].bp * syL[b].k * g; wR += syR[b].bp * syR[b].k * g; }
             const double dry = (l * l + r * r) * 0.5, wet = (wL * wL + wR * wR) * 0.5;
             vDry += (dry - vDry) * 0.00007; vWet += (wet - vWet) * 0.00007;
-            const bool autoL = Pp.vocAuto > 0.5f;
+            const bool autoL = G.vocAuto > 0.5f;
             if (autoL && vDry > 1e-8) vGain += (clampv(0.75 * std::sqrt(vDry / std::max(vWet, 1e-12)), 0.05, 40.0) - vGain) * 0.0005;
             const double vg = autoL ? vGain : 1; wL *= vg; wR *= vg;
-            l = l * (1 - Pp.vocMix) + wL * Pp.vocMix; r = r * (1 - Pp.vocMix) + wR * Pp.vocMix;
+            l = l * (1 - G.vocMix) + wL * G.vocMix; r = r * (1 - G.vocMix) + wR * G.vocMix;
         }
+        prevWet = 0.5 * (wL + wR); lsWL[i] = float(wL); lsWR[i] = float(wR);
+        // ---- microcuts ----
+        cuts.write(l, r);
+        if (mcOn && cuts.active()) { double cl, cr, duck; cuts.tick(G, cl, cr, duck); l = l * (1 - duck) + cl; r = r * (1 - duck) + cr; mL += cl; mR += cr; }
+        lsML[i] = float(mL); lsMR[i] = float(mR);
         // space
         double sL = 0, sR = 0;
         if (spMix > 0.001) {
@@ -472,27 +609,54 @@ void Engine::renderChunk(int n, float* L, float* R, float* tap) {
             sL = (fo[0] - fo[2] + fo[4] - fo[6]) * 0.5; sR = (fo[1] - fo[3] + fo[5] - fo[7]) * 0.5;
             l += sL * spMix; r += sR * spMix;
         }
-        // listen point
-        double oL = l, oR = r;
+        prevSpace = 0.5 * (sL + sR); lsSL[i] = float(sL); lsSR[i] = float(sR);
+        cL[i] = float(l); cR[i] = float(r);
+    }
+    // ---- catch (Nebulae), block-wise at the end of the chain ----
+    const int ctMode = int(G.ctMode);
+    if (ctMode == 0) { std::fill(lsCL, lsCL + n, 0.f); std::fill(lsCR, lsCR + n, 0.f); catchSec.level = 0; }
+    else {
+        const float sendG = ctMode == 2 ? G.ctSend : 1.f;
+        for (int i = 0; i < n; ++i) { ctL[i] = cL[i] * sendG; ctR[i] = cR[i] * sendG; }
+        catchSec.process(G, ctL, ctR, lsCL, lsCR, n, true);
+        const bool live = catchSec.hasLoop() || catchSec.recording();
+        const float ret = G.ctReturn, dg = catchSec.dryG;
+        for (int i = 0; i < n; ++i) {
+            const float wl = lsCL[i] * ret, wr = lsCR[i] * ret;
+            if (ctMode == 1) { if (live) { cL[i] = cL[i] * dg + wl; cR[i] = cR[i] * dg + wr; } }
+            else { cL[i] += wl; cR[i] += wr; }
+            lsCL[i] = wl; lsCR[i] = wr;
+        }
+    }
+    // ---- listen, level, output ----
+    for (int i = 0; i < n; ++i) {
+        double oL = cL[i], oR = cR[i];
         switch (listen) { case 1: oL = t1L[i]; oR = t1R[i]; break; case 2: oL = t2L[i]; oR = t2R[i]; break; case 3: oL = bL[i]; oR = bR[i]; break;
-            case 4: oL = wL; oR = wR; break; case 5: oL = fL; oR = fR; break; case 6: oL = sL; oR = sR; break; default: break; }
+            case 4: oL = lsWL[i]; oR = lsWR[i]; break; case 5: oL = lsFL[i]; oR = lsFR[i]; break; case 6: oL = lsSL[i]; oR = lsSR[i]; break;
+            case 7: oL = lsML[i]; oR = lsMR[i]; break; case 8: oL = lsCL[i]; oR = lsCR[i]; break; default: break; }
         if (listen) { const double ms = (oL * oL + oR * oR) * 0.5; agcR += (ms - agcR) * 0.00005;
             if (agcR > 1e-9) agc += (clampv(0.12 / std::sqrt(agcR), 0.25, 16.0) - agc) * 0.0002; oL *= agc; oR *= agc; }
         sumSq += (oL * oL + oR * oR) * 0.5;
-        const double g = Pp.vol * Pp.abTrim; oL *= g; oR *= g;
+        prevOut = 0.5 * (cL[i] + cR[i]);
+        const double g = G.vol * B0.abTrim; oL *= g; oR *= g;
         const double dl = oL - dcL0 + 0.9995 * dcL1; dcL0 = oL; dcL1 = dl;
         const double drr = oR - dcR0 + 0.9995 * dcR1; dcR0 = oR; dcR1 = drr;
         oL = ft(dl); oR = ft(drr);
         if (!(oL == oL) || !(oR == oR)) { oL = 0; oR = 0; dcL0 = dcL1 = dcR0 = dcR1 = 0; panicDSP(); }
         L[i] = float(oL); R[i] = float(oR);
-        if (tap) { const int tp = int(Pp.tap); tap[i] = float(tp == 0 ? (oL + oR) * 0.5 : tp == 1 ? vt[i] : dc); }
+        if (tap) { const int tp = int(G.tap); tap[i] = float(tp == 0 ? (oL + oR) * 0.5 : tp == 1 ? vt[i] : lsDC[i]); }
     }
+    outEnergy = outEnergy * 0.9 + 0.1 * (sumSq / std::max(1, n));
     if (act) outR = outR * 0.9 + 0.1 * (sumSq / n);
     meterRms = float(std::sqrt(outR)); activeVoices = act;
     if ((vizC += n) > sr / 30) { vizC = 0; Voice* v = lastV; VizSnapshot s; s.voices = act;
+        for (int h = 0; h < NHEAD; ++h) s.seqStep[h] = seq.running ? seq.cur[h] : -1;
+        s.clockEnv = clock.env; s.sediment = sed.level; s.erosion = sed.erosion; s.catchLevel = catchSec.level; s.catchLoop = catchSec.loopSeconds(); s.catchRec = catchSec.recording();
+        for (int k = 0; k < MS_COUNT; ++k) s.src[k] = src[k];
         if (v && v->active) { s.on = true; s.N = v->A.N;
             for (int i = 0; i < s.N; ++i) { s.th[i] = float(v->A.th[i]); double a = 0; for (int qq = 0; qq < 2; ++qq) if (v->A.on[i * 2 + qq]) a = std::max(a, v->A.rl[i * 2 + qq] ? v->A.rg[i * 2 + qq] : 1.0); s.e[i] = float(a); }
-            s.R = float(v->A.R); s.stage = v->stage; s.f0 = float(v->A.inc[0] * sr); s.ff = float(v->A.ff * sr); for (int k = 0; k < NK; ++k) s.cur[k] = float(v->cur[k]); }
+            s.R = float(v->A.R); s.stage = v->stage; s.note = v->note;
+            s.prog = float(v->stage == 4 ? clampv(-std::log(std::max(1e-6, v->tail)) / 6.9, 0.0, 1.0) : clampv(v->t / std::max(1e-6, v->T), 0.0, 1.0)); s.f0 = float(v->A.inc[0] * sr); s.ff = float(v->A.ff * sr); for (int k = 0; k < NK; ++k) s.cur[k] = float(v->cur[k]); }
         viz = s; }
 }
 

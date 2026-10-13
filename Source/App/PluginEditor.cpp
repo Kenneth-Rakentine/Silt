@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "Format.h"
+#include "Help.h"
 
 using namespace ui;
 
@@ -80,25 +81,28 @@ Row::Row(juce::AudioProcessorValueTreeState& s, const juce::String& pid, const j
     label.setText(text, juce::dontSendNotification);
     label.setFont(sans(13.f)); label.setColour(juce::Label::textColourId, col::muted);
     addAndMakeVisible(label);
-    const silt::PDef* def = nullptr;
-    for (auto& d : silt::kParams) if (pid == d.id) def = &d;
+    const silt::PDef* def = silt::findParam(pid.toStdString());
     const auto kind = def ? def->kind : silt::Kind::Cont;
+    const juce::String tip = juce::String::fromUTF8(helpFor(pid.toStdString()));
+    label.setTooltip(tip);
     if (kind == silt::Kind::Choice) {
         combo = std::make_unique<juce::ComboBox>();
-        auto items = juce::StringArray::fromTokens(def->choices, "|", "");
-        for (int i = 0; i < items.size(); ++i) combo->addItem(items[i], i + 1);
+        const auto items = silt::choiceItems(*def);
+        for (size_t i = 0; i < items.size(); ++i) combo->addItem(juce::String::fromUTF8(items[i].c_str()), (int) i + 1);
+        combo->setTooltip(tip);
         addAndMakeVisible(*combo);
         cAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(s, pid, *combo);
     } else if (kind == silt::Kind::Toggle) {
         toggle = std::make_unique<juce::TextButton>(text);
-        toggle->setClickingTogglesState(true);
+        toggle->setClickingTogglesState(true); toggle->setTooltip(tip);
         addAndMakeVisible(*toggle);
         bAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(s, pid, *toggle);
         label.setVisible(false);
     } else {
         slider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight);
         slider->setTextBoxStyle(juce::Slider::TextBoxRight, false, 92, 20);
-        slider->setColour(juce::Slider::textBoxTextColourId, col::ink);
+        slider->setColour(juce::Slider::textBoxTextColourId, col::ink); slider->setTooltip(tip);
+        slider->setScrollWheelEnabled(false); // the wheel scrolls the page, never a knob by accident
         addAndMakeVisible(*slider);
         sAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(s, pid, *slider);
         if (auto* p = s.getParameter(pid)) slider->setDoubleClickReturnValue(true, p->convertFrom0to1(p->getDefaultValue()));
@@ -155,7 +159,7 @@ void Panel::paint(juce::Graphics& g) {
 Bands::Bands(SiltProcessor& p) : proc(p) {
     for (int b = 0; b < 8; ++b) {
         sl[b].setSliderStyle(juce::Slider::LinearVertical);
-        sl[b].setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+        sl[b].setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0); sl[b].setScrollWheelEnabled(false);
         addAndMakeVisible(sl[b]);
         att[b] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(p.apvts, "band" + juce::String(b), sl[b]);
     }
@@ -316,11 +320,12 @@ void Notes::paint(juce::Graphics& g) {
 // ============================== editor ==============================
 static const std::pair<int, int> kKeyMap[] = { { 'A', 0 }, { 'W', 1 }, { 'S', 2 }, { 'E', 3 }, { 'D', 4 }, { 'F', 5 }, { 'T', 6 }, { 'G', 7 }, { 'Y', 8 },
                                                { 'H', 9 }, { 'U', 10 }, { 'J', 11 }, { 'K', 12 }, { 'O', 13 }, { 'L', 14 }, { 'P', 15 }, { ';', 16 } };
-static const char* kListenNotes[7] = { "Hearing the full output.",
+static const char* kListenNotes[9] = { "Hearing the full output.",
     "Raw layers: the emitters and mixer only, before resonator, derez, filter and VCA. Auto-levelled.",
     "Pre-filter: after the resonator and derez, before the filter. Auto-levelled.",
     "Voices: after filter, VCA and heat, before feedback, vocoder and space. Auto-levelled.",
-    "Vocoder wet only: what the material vocoder adds. Auto-levelled.", "Feedback return only. Auto-levelled.", "Space wet only. Auto-levelled." };
+    "Vocoder wet only: what the material vocoder adds. Auto-levelled.", "Feedback return only. Auto-levelled.", "Space wet only. Auto-levelled.",
+    "Memory wet only: regeneration and microcuts. Auto-levelled.", "Catch wet only. Auto-levelled." };
 
 SiltEditor::SiltEditor(SiltProcessor& p)
     : AudioProcessorEditor(p), proc(p), screens(p), keyboard(p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard) {
@@ -342,7 +347,7 @@ SiltEditor::SiltEditor(SiltProcessor& p)
     listenLbl.setText("Listen", juce::dontSendNotification); tapLbl.setText("Scope shows", juce::dontSendNotification);
     for (auto* l : { &listenLbl, &tapLbl }) { l->setFont(sans(13.f)); l->setColour(juce::Label::textColourId, col::muted); addAndMakeVisible(l); }
     for (auto [box, id] : { std::pair<juce::ComboBox*, const char*> { &listenBox, "listen" }, { &tapBox, "tap" } }) {
-        for (auto& d : silt::kParams) if (juce::String(d.id) == id) { auto items = juce::StringArray::fromTokens(d.choices, "|", ""); for (int i = 0; i < items.size(); ++i) box->addItem(items[i], i + 1); }
+        { const auto items = silt::choiceItems(*silt::findParam(id)); for (size_t i = 0; i < items.size(); ++i) box->addItem(juce::String::fromUTF8(items[i].c_str()), (int) i + 1); }
         addAndMakeVisible(box);
     }
     listenAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(p.apvts, "listen", listenBox);
@@ -359,7 +364,10 @@ SiltEditor::SiltEditor(SiltProcessor& p)
     addAndMakeVisible(abNote);
     addAndMakeVisible(notes);
 
-    viewport.setViewedComponent(&content, false);
+    const char* tabNames[kTabs] = { "Voice", "Feedback", "Memory", "Movement", "Catch" };
+    for (int t = 0; t < kTabs; ++t) { tabBtn[t].setButtonText(tabNames[t]); tabBtn[t].setRadioGroupId(77); tabBtn[t].setClickingTogglesState(true);
+        tabBtn[t].onClick = [this, t] { showTab(t); }; addAndMakeVisible(tabBtn[t]); }
+    viewport.setViewedComponent(&content[0], false);
     viewport.setScrollBarsShown(true, false);
     viewport.setScrollBarThickness(10);
     addAndMakeVisible(viewport);
@@ -377,16 +385,18 @@ SiltEditor::SiltEditor(SiltProcessor& p)
     panicBtn.onClick = [this] { panic(); };
     octLabel.setFont(mono(13.f)); octLabel.setJustificationType(juce::Justification::centred); addAndMakeVisible(octLabel);
     keysHint.setFont(mono(11.5f)); keysHint.setColour(juce::Label::textColourId, col::muted);
-    keysHint.setText("Keys  A W S E D F T G Y H U J K O L P ;   Z/X octave   Mod wheel = Allure", juce::dontSendNotification);
+    keysHint.setText("Keys  A W S E D F T G Y H U J K O L P ;   Z/X octave   Mod wheel = Flux", juce::dontSendNotification);
     addAndMakeVisible(keysHint);
 
     refreshPatchMenu();
     releaseFocusTheft(*this);
+    for (auto& c : content) releaseFocusTheft(c);
     setWantsKeyboardFocus(true);
     setResizable(true, true);
     setResizeLimits(1040, 680, 3200, 2200);
     setSize(1400, 880);
     setOctave(3);
+    showTab(0);
     abUi();
     startTimerHz(20);
 }
@@ -405,6 +415,8 @@ void SiltEditor::releaseFocusTheft(juce::Component& c) {
 
 void SiltEditor::buildPanels() {
     auto& s = proc.apvts;
+    std::vector<std::unique_ptr<ui::Panel>>* cur = &panels[0];
+    auto addPanel = [&](std::unique_ptr<ui::Panel> p) -> ui::Panel& { cur->push_back(std::move(p)); return *cur->back(); };
     auto layer = [&](const char* pre, const char* name, juce::Colour tint) {
         auto pnl = std::make_unique<ui::Panel>(name, tint);
         const juce::String P(pre);
@@ -416,45 +428,159 @@ void SiltEditor::buildPanels() {
         pnl->add(s, P + "N", "Emitters"); pnl->add(s, P + "Det", "Detune spread"); pnl->add(s, P + "Wander", "Wander");
         pnl->add(s, P + "Pan", "Stereo spread"); pnl->add(s, P + "Lvl", "Level");
         if (P == "b") { pnl->add(s, "bSemi", "Pitch"); pnl->add(s, "bFine", "Fine"); }
-        panels.push_back(std::move(pnl));
+        addPanel(std::move(pnl));
     };
     auto group = [&](const char* name, std::initializer_list<const char*> ids, juce::Colour tint = col::accent) -> ui::Panel& {
         auto pnl = std::make_unique<ui::Panel>(name, tint);
-        for (auto* id : ids) for (auto& d : silt::kParams) if (juce::String(d.id) == id) pnl->add(s, id, d.label);
-        panels.push_back(std::move(pnl)); return *panels.back();
+        for (auto* id : ids) if (auto* d = silt::findParam(id)) pnl->add(s, id, d->label);
+        return addPanel(std::move(pnl));
     };
+    // every parameter of a group, in table order
+    auto groupAll = [&](const char* grp, const juce::String& title, juce::Colour tint = col::accent) -> ui::Panel& {
+        auto pnl = std::make_unique<ui::Panel>(title, tint);
+        for (auto& d : silt::params()) if (juce::String(d.group) == grp) pnl->add(s, d.id, d.label);
+        return addPanel(std::move(pnl));
+    };
+    auto keep = [&](juce::Component* c) { extras.emplace_back(c); return c; };
+
+    // ---- Voice ----
+    cur = &panels[0];
     layer("a", "Layer A", col::accent);
     layer("b", "Layer B", col::accent);
-    for (int st = 0; st < 3; ++st) {
-        auto pnl = std::make_unique<ui::Panel>(juce::String("State: ") + silt::kStageNames[st], col::trace2);
-        for (int k = 0; k < silt::NK; ++k) pnl->add(s, silt::stateId(st, k), silt::kStateDefs[k].label);
-        panels.push_back(std::move(pnl));
+    {
+        auto& art = group("Articulation", { "atk", "dec", "rel", "tail", "curve", "loopTime", "loop" }, col::trace2);
+        artView = std::make_unique<ui::ArticulationView>(proc);
+        art.addExtra(artView.get(), 190);
     }
-    group("Articulation", { "atk", "dec", "rel", "curve", "loopTime", "loop" }, col::trace2);
-    group("Motion", { "auth", "stiff", "visc", "temp", "poly", "velAmp" }, col::trace2);
+    const char* stageTitle[3] = { "Onset: where a key press goes", "Continuant: where it rests while held", "Termination: where it goes on release" };
+    for (int st = 0; st < 3; ++st) {
+        auto pnl = std::make_unique<ui::Panel>(stageTitle[st], col::trace2);
+        for (int k = 0; k < silt::NK; ++k) pnl->add(s, silt::stateId(st, k), silt::kStateDefs[k].label);
+        addPanel(std::move(pnl));
+    }
+    group("Motion (physics)", { "auth", "stiff", "visc", "temp", "poly", "velAmp" }, col::trace2);
+    group("Filter and VCA", { "fCut", "fMode", "reso", "drive", "heat", "keytrack", "velCut" });
     group("Macros", { "mass", "grainM", "allure", "vol" }, col::sed);
     group("Voice", { "pmAmt", "formTrack", "wanderRate", "derez", "drift", "resTune", "resDecay", "strike" });
-    group("Filter and VCA", { "fMode", "reso", "drive", "heat", "keytrack", "velCut" });
     auto& voc = group("Material vocoder", { "vocOn", "vocAuto", "vocBody", "vocSkin", "vocMix", "vocShift", "vocSpread", "vocQ", "vocResp",
                                             "scrapeRate", "scrapeDepth", "dustRate", "dropRate", "dropPitch" }, col::sed);
     bands = std::make_unique<ui::Bands>(proc);
     voc.addExtra(bands.get(), 190);
-    group("Feedback", { "fbType", "fbTime", "fbCut", "fbQ", "fbDrive", "fbRegen", "fbMix" }, col::sed);
     group("Space", { "spSize", "spDecay", "spTone", "spMix" }, col::sed);
-    for (auto& pn : panels) content.addAndMakeVisible(*pn);
+
+    // ---- Feedback ----
+    cur = &panels[1];
+    for (int b = 0; b < silt::NBUS; ++b) {
+        auto& p = groupAll(("Bus " + std::to_string(b + 1)).c_str(), "Feedback bus " + juce::String(b + 1), col::sed);
+        auto* m = new ui::Meter("Loop level", [this, b] { return proc.getViz().src[silt::MS_FB1 + b]; }, col::sed);
+        p.addExtra(keep(m), 26);
+    }
+
+    // ---- Memory ----
+    cur = &panels[2];
+    {
+        auto& p = groupAll("Sediment", "Sediment", col::sed);
+        p.addExtra(keep(new ui::Meter("Sediment level", [this] { return proc.getViz().sediment; }, col::sed)), 26);
+        auto* bar = new ui::ButtonBar(); bar->addButton("Clear sediment", [this] { proc.act(SiltProcessor::A_SEDCLEAR); });
+        p.addExtra(keep(bar), 30);
+    }
+    {
+        auto& p = groupAll("Erosion", "Erosion", col::sed);
+        p.addExtra(keep(new ui::Meter("Worn", [this] { return proc.getViz().erosion; }, col::warn)), 26);
+        auto* bar = new ui::ButtonBar(); bar->addButton("Restore", [this] { proc.act(SiltProcessor::A_ERORESTORE); });
+        p.addExtra(keep(bar), 30);
+    }
+    groupAll("Regeneration", "Regeneration memory", col::sed);
+    groupAll("Microcuts", "Microcuts", col::sed);
+
+    // ---- Movement ----
+    cur = &panels[3];
+    {
+        auto& p = groupAll("Sequencer", "Graph sequencer", col::trace2);
+        graph = std::make_unique<ui::SeqGraph>(proc);
+        graph->onSelect = [this](int i) { selectStep(i); };
+        p.addExtra(graph.get(), 330);
+    }
+    {
+        auto pnl = std::make_unique<ui::Panel>("Step 1", col::trace2);
+        stepPanel = &addPanel(std::move(pnl));
+    }
+    groupAll("Playhead 1", "Playhead 1", col::trace2);
+    groupAll("Playhead 2", "Playhead 2", col::trace2);
+    {
+        auto& p = groupAll("Clock", "Master clock", col::trace2);
+        p.addExtra(keep(new ui::Meter("Pulse", [this] { return proc.getViz().clockEnv; }, col::trace2)), 26);
+        p.addExtra(keep(new ui::Meter("Oscillator A", [this] { return 0.5f + 0.5f * proc.getViz().src[silt::MS_CLKA]; })), 26);
+        p.addExtra(keep(new ui::Meter("Oscillator B", [this] { return 0.5f + 0.5f * proc.getViz().src[silt::MS_CLKB]; })), 26);
+    }
+    {
+        auto& p = groupAll("LFOs and dust", "LFOs and dust", col::trace2);
+        p.addExtra(keep(new ui::Meter("LFO 1", [this] { return 0.5f + 0.5f * proc.getViz().src[silt::MS_LFO1]; })), 26);
+        p.addExtra(keep(new ui::Meter("LFO 2", [this] { return 0.5f + 0.5f * proc.getViz().src[silt::MS_LFO2]; })), 26);
+        p.addExtra(keep(new ui::Meter("Dust", [this] { return proc.getViz().src[silt::MS_DUST]; }, col::sed)), 26);
+    }
+    {
+        auto pnl = std::make_unique<ui::Panel>("Mod matrix", col::trace2);
+        for (int i = 0; i < silt::NSLOT; ++i) { auto* r = new ui::ModRow(proc, i); modRows.push_back(r); pnl->addExtra(keep(r), 58); }
+        addPanel(std::move(pnl));
+    }
+    selectStep(0);
+
+    // ---- Catch ----
+    cur = &panels[4];
+    {
+        auto& p = groupAll("Catch", "Catch (Nebulae)", col::accent);
+        auto* bar = new ui::ButtonBar();
+        bar->addButton("Record", [this] { proc.act(SiltProcessor::A_REC); });
+        bar->addButton("Catch", [this] { proc.act(SiltProcessor::A_CATCH); });
+        bar->addButton("Clear", [this] { proc.act(SiltProcessor::A_CLEAR); });
+        p.addExtra(keep(bar), 32);
+        auto* m = new ui::Meter("Loop", [this] { return juce::jmin(1.f, proc.getViz().catchLoop / 30.f); });
+        m->text = [this] { const auto v = proc.getViz(); return v.catchRec ? juce::String("rec") : juce::String(v.catchLoop, 1) + " s"; };
+        p.addExtra(keep(m), 26);
+        auto* lv = new ui::Meter("Output", [this] { return juce::jmin(1.f, proc.getViz().catchLevel * 4); }, col::sed);
+        p.addExtra(keep(lv), 26);
+    }
+    groupAll("Catch: second page", "Catch: second page");
+    groupAll("Catch: third page", "Catch: third page");
+    groupAll("Catch: LFO 1", "Catch: LFO 1");
+    groupAll("Catch: LFO 2", "Catch: LFO 2");
+
+    for (int t = 0; t < kTabs; ++t) for (auto& pn : panels[t]) content[t].addAndMakeVisible(*pn);
+}
+
+void SiltEditor::selectStep(int i) {
+    if (!stepPanel) return;
+    stepPanel->clearRows();
+    stepPanel->title = "Step " + juce::String(i + 1);
+    const juce::String p = "st" + juce::String(i);
+    const char* f[10][2] = { { "On", "Step on" }, { "Note", "Note" }, { "Vel", "Velocity" }, { "Prob", "Probability" }, { "Len", "Gate length" },
+                             { "Val", "Value (mod source)" }, { "Cut", "Microcut" }, { "To1", "Cord 1 goes to" }, { "To2", "Cord 2 goes to" }, { "Br", "Cord 2 chance" } };
+    for (auto& x : f) stepPanel->add(proc.apvts, p + x[0], x[1]);
+    for (auto& r : stepPanel->rows) { r->setWantsKeyboardFocus(false); releaseFocusTheft(*r); }
+    if (graph) { graph->selected = i; graph->repaint(); }
+    stepPanel->resized(); stepPanel->repaint();
+}
+
+void SiltEditor::showTab(int t) {
+    tab = juce::jlimit(0, kTabs - 1, t);
+    for (int i = 0; i < kTabs; ++i) tabBtn[i].setToggleState(i == tab, juce::dontSendNotification);
+    viewport.setViewedComponent(&content[tab], false);
+    layoutPanels();
 }
 
 void SiltEditor::layoutPanels() {
     const int W = viewport.getWidth() - viewport.getScrollBarThickness() - 4;
+    if (W <= 0) return;
     const int gap = 10, ncol = juce::jmax(1, (W + gap) / (300 + gap)), cw = (W - (ncol - 1) * gap) / ncol;
     std::vector<int> h((size_t) ncol, 0);
-    for (auto& pn : panels) {
+    for (auto& pn : panels[tab]) {
         const size_t c = (size_t) (std::min_element(h.begin(), h.end()) - h.begin());
         const int ph = pn->preferredHeight();
         pn->setBounds((int) c * (cw + gap), h[c], cw, ph);
         h[c] += ph + gap;
     }
-    content.setSize(W, *std::max_element(h.begin(), h.end()));
+    content[tab].setSize(W, *std::max_element(h.begin(), h.end()));
 }
 
 void SiltEditor::paint(juce::Graphics& g) {
@@ -489,6 +615,8 @@ void SiltEditor::resized() {
     r.reduce(14, 12);
     auto left = r.removeFromLeft(juce::jlimit(360, 460, r.getWidth() / 3));
     r.removeFromLeft(14);
+    auto tabs = r.removeFromTop(30); r.removeFromTop(8);
+    { const int tw = juce::jmin(130, (tabs.getWidth() - (kTabs - 1) * 6) / kTabs); for (int t = 0; t < kTabs; ++t) { tabBtn[t].setBounds(tabs.removeFromLeft(tw)); tabs.removeFromLeft(6); } }
     viewport.setBounds(r);
     layoutPanels();
 
@@ -538,7 +666,8 @@ void SiltEditor::onPatchChosen() {
 
 void SiltEditor::afterPatchLoad() {
     notes.set(proc.patchNotes);
-    for (auto& pn : panels) for (auto& row : pn->rows) if (row->slider) row->slider->setDoubleClickReturnValue(true, row->slider->getValue());
+    for (auto& tp : panels) for (auto& pn : tp) for (auto& row : pn->rows) if (row->slider) row->slider->setDoubleClickReturnValue(true, row->slider->getValue());
+    if (graph) graph->repaint();
     refreshPatchMenu();
 }
 
@@ -663,7 +792,22 @@ void SiltEditor::timerCallback() {
     }
     if (proc.patchSerial.load() != lastSerial) { lastSerial = proc.patchSerial.load(); afterPatchLoad(); }
     for (auto* r : posRows) if (r && r->slider) r->slider->updateText();
-    listenNote.setText(kListenNotes[juce::jlimit(0, 6, listenBox.getSelectedItemIndex())], juce::dontSendNotification);
+    {
+        const auto v = proc.getViz();
+        if (tab == 0 && artView) artView->update(v);
+        if (tab == 3 && graph) { const bool ch = graph->heads[0] != v.seqStep[0] || graph->heads[1] != v.seqStep[1];
+            graph->heads[0] = v.seqStep[0]; graph->heads[1] = v.seqStep[1]; if (ch) graph->repaint();
+            for (auto* m : modRows) { const int si = (int) proc.apvts.getRawParameterValue("m" + juce::String(m->slot) + "Src")->load();
+                const float lv = si > 0 && si < silt::MS_COUNT ? v.src[si] : 0.f; if (std::abs(lv - m->live) > 0.01f) { m->live = lv; m->repaint(); } } }
+        for (auto& e : extras) if (dynamic_cast<ui::Meter*>(e.get()) && e->isShowing()) e->repaint();
+    }
+    {
+        const int li = juce::jlimit(0, 8, listenBox.getSelectedItemIndex());
+        listenNote.setText(kListenNotes[li], juce::dontSendNotification);
+        // make it obvious when you are not hearing the whole instrument
+        listenBox.setColour(juce::ComboBox::backgroundColourId, li == 0 ? col::bg : col::sed.withAlpha(0.35f));
+        listenNote.setColour(juce::Label::textColourId, li == 0 ? col::muted : col::sed);
+    }
     {
         static const char* stages[5] = { "Onset", "Continuant", "Termination", "Looping", "Tail" };
         const auto v = proc.getViz();

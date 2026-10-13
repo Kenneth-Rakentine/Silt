@@ -12,8 +12,9 @@ SiltProcessor::SiltProcessor()
       apvts(*this, nullptr, "SILT", createLayout()) {
     bankRaw[0] = apvts.getRawParameterValue("aBank");
     bankRaw[1] = apvts.getRawParameterValue("bBank");
-    for (int i = 0; i < kNumGlobal; ++i)
-        if (float* f = paramField(P, kParams[i].id)) bindings.push_back({ apvts.getRawParameterValue(kParams[i].id), f });
+    P = defaultParams();
+    for (auto& d : params())
+        if (float* f = paramField(P, d.id)) bindings.push_back({ apvts.getRawParameterValue(d.id), f });
     for (int s = 0; s < 3; ++s) for (int k = 0; k < NK; ++k) stateRaw[s][k] = apvts.getRawParameterValue(stateId(s, k));
     allureParam = apvts.getParameter("allure");
     writerThread.startThread();
@@ -31,18 +32,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout SiltProcessor::createLayout(
             [](float a, float b, float v) { return std::log(v / a) / std::log(b / a); }, nullptr);
         return juce::NormalisableRange<float>(mn, mx);
     };
-    for (int i = 0; i < kNumGlobal; ++i) {
-        const PDef& d = kParams[i];
+    for (const PDef& d : params()) {
         const bool stepped = d.kind != Kind::Cont;
+        juce::StringArray items; for (auto& c : choiceItems(d)) items.add(juce::String::fromUTF8(c.c_str()));
         auto attrs = juce::AudioParameterFloatAttributes().withStringFromValueFunction(
-            [this, d](float v, int) -> juce::String {
+            [this, d, items](float v, int) -> juce::String {
                 if (d.kind == Kind::Toggle) return v >= 0.5f ? "On" : "Off";
-                if (d.kind == Kind::Choice) { auto c = juce::StringArray::fromTokens(d.choices, "|", ""); return c[juce::jlimit(0, c.size() - 1, (int) std::lround(v))]; }
+                if (d.kind == Kind::Choice) return items[juce::jlimit(0, items.size() - 1, (int) std::lround(v))];
                 juce::String f = d.fmt;
                 if (f == "posA" || f == "posB") { auto* b = bankRaw[f == "posA" ? 0 : 1]; return fmtPos(b ? (int) b->load() : 0, v); }
                 return fmtValue(f, v); })
-            .withValueFromStringFunction([d](const juce::String& t) -> float {
-                if (d.kind == Kind::Choice) { auto c = juce::StringArray::fromTokens(d.choices, "|", ""); const int i = c.indexOf(t.trim(), true); return i >= 0 ? (float) i : t.getFloatValue(); }
+            .withValueFromStringFunction([d, items](const juce::String& t) -> float {
+                if (d.kind == Kind::Choice) { const int i = items.indexOf(t.trim(), true); return i >= 0 ? (float) i : t.getFloatValue(); }
                 if (d.kind == Kind::Toggle) return t.trim().equalsIgnoreCase("on") || t.getFloatValue() >= 0.5f ? 1.f : 0.f;
                 return parseValue(d.fmt, t); });
         layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { d.id, 1 }, juce::String(d.group) + ": " + d.label,
@@ -92,6 +93,13 @@ void SiltProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     for (int s = 0; s < 3; ++s) for (int k = 0; k < NK; ++k) S[(size_t) s][(size_t) k] = stateRaw[s][k]->load(std::memory_order_relaxed);
     engine.setControls(P, S);
     if (panicRequest.exchange(false)) engine.panic();
+    if (const int a = actions.exchange(0)) {
+        if (a & A_CATCH) engine.catchNow();
+        if (a & A_REC) engine.catchRecord();
+        if (a & A_CLEAR) engine.catchClear();
+        if (a & A_SEDCLEAR) engine.sedimentClear();
+        if (a & A_ERORESTORE) engine.erosionRestore();
+    }
 
     float* L = buffer.getWritePointer(0);
     float* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : L;
@@ -100,9 +108,11 @@ void SiltProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
         const auto msg = meta.getMessage();
         const int sp = juce::jlimit(0, n, meta.samplePosition);
         if (sp > pos) { renderSegment(L + pos, R + pos, sp - pos); pos = sp; }
-        if (msg.isNoteOn()) engine.noteOn(msg.getNoteNumber(), msg.getFloatVelocity());
-        else if (msg.isNoteOff()) engine.noteOff(msg.getNoteNumber());
-        else if (msg.isController() && msg.getControllerNumber() == 1 && allureParam) allureParam->setValueNotifyingHost(msg.getControllerValue() / 127.f);
+        if (msg.isNoteOn()) engine.keyOn(msg.getNoteNumber(), msg.getFloatVelocity());
+        else if (msg.isNoteOff()) engine.keyOff(msg.getNoteNumber());
+        else if (msg.isController() && msg.getControllerNumber() == 1) {
+            engine.setModWheel(msg.getControllerValue() / 127.f);
+            if (allureParam) allureParam->setValueNotifyingHost(msg.getControllerValue() / 127.f); }
         else if (msg.isAllNotesOff() || msg.isAllSoundOff()) engine.panic();
     }
     if (pos < n) renderSegment(L + pos, R + pos, n - pos);
@@ -122,11 +132,12 @@ juce::File SiltProcessor::takesDir() { return juce::File::getSpecialLocation(juc
 juce::var SiltProcessor::patchVar() const {
     auto* Pobj = new juce::DynamicObject();
     juce::Array<juce::var> bands;
-    for (int i = 0; i < kNumGlobal; ++i) {
-        const juce::String id = kParams[i].id;
+    for (const PDef& d : params()) {
+        const juce::String id = d.id;
         const float v = apvts.getRawParameterValue(id)->load();
         if (id.startsWith("band")) { bands.add(v); continue; }
-        Pobj->setProperty(id, kParams[i].kind == Kind::Cont ? juce::var((double) v) : juce::var((int) std::lround(v)));
+        if (juce::String(d.choices) == "@dst") { const int i = (int) std::lround(v); Pobj->setProperty(id, juce::String(i > 0 && i < (int) modDests().size() ? modDests()[(size_t) i].id : std::string())); continue; }
+        Pobj->setProperty(id, d.kind == Kind::Cont ? juce::var((double) v) : juce::var((int) std::lround(v)));
     }
     Pobj->setProperty("bands", bands);
     Pobj->setProperty("abTrim", 1);
@@ -147,14 +158,15 @@ bool SiltProcessor::loadPatchVar(const juce::var& v) {
     const juce::var base = juce::JSON::parse(juce::String::fromUTF8(kBaseJson));
     auto setParam = [this](const juce::String& id, float value) {
         if (auto* p = apvts.getParameter(id)) p->setValueNotifyingHost(p->convertTo0to1(p->getNormalisableRange().snapToLegalValue(value))); };
-    for (int i = 0; i < kNumGlobal; ++i) {
-        const juce::String id = kParams[i].id;
+    for (const PDef& d : params()) {
+        const juce::String id = d.id;
         if (id == "listen" || id == "tap") continue; // bench settings stay where they are
         if (id.startsWith("band")) { const int b = id.getTrailingIntValue(); juce::var arr = Pv["bands"]; if (!arr.isArray()) arr = base["bands"];
             setParam(id, arr.isArray() && b < arr.size() ? (float) (double) arr[b] : 0.8f); continue; }
         juce::var x = Pv[juce::Identifier(id)]; if (x.isVoid()) x = base[juce::Identifier(id)];
         if (x.isBool()) x = (bool) x ? 1 : 0;
-        if (!x.isVoid()) setParam(id, (float) (double) x);
+        if (x.isString()) x = juce::String(d.choices) == "@dst" ? modDestIndex(x.toString().toStdString()) : 0;
+        setParam(id, x.isVoid() ? d.def : (float) (double) x);
     }
     for (int s = 0; s < 3; ++s) for (int k = 0; k < NK; ++k) {
         juce::var x = Sv[s][juce::Identifier(kStateKeys[k])];

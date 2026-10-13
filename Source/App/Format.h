@@ -29,6 +29,10 @@ inline juce::String fmtValue(const juce::String& f, float xf) {
     if (f == "semi") return sgn(x) + juce::String((int) std::lround(x)) + " st";
     if (f == "per") return fx(x, x < 10 ? 1 : 0) + " /s";
     if (f == "ratio") return juce::String::fromUTF8("\xc3\x97") + fx(x, x < 10 ? 2 : 1);
+    if (f == "tail") return x < 0.001 ? juce::String("Auto") : (x < 1 ? fx(x * 1000, 0) + " ms" : fx(x, 2) + " s");
+    if (f == "steps") return fx(x, x < 10 && std::abs(x - std::round(x)) > 1e-3 ? 2 : 0) + (std::abs(x - 1) < 1e-3 ? " step" : " steps");
+    if (f == "bpm") return fx(x, 1) + " bpm";
+    if (f == "clk") return x < 0.08 ? "Square" : x < 0.2 ? "Square > pulse" : x < 0.3 ? "Skewed pulse" : x < 0.45 ? "Pulse > saw" : x < 0.55 ? "Saw" : x < 0.7 ? "Saw > triangle" : x < 0.8 ? "Triangle" : x < 0.95 ? "Triangle > sine" : "Sine";
     if (f == "win") return x < 0.02 ? "Rect" : x < 0.48 ? "Rect > Hann" : x < 0.52 ? "Hann" : x < 0.98 ? "Hann > Exp" : "Expodec";
     return fx(x, 2);
 }
@@ -47,6 +51,7 @@ inline float parseValue(const juce::String& f, const juce::String& text) {
     const double v = t.retainCharacters("0123456789.-+eE").getDoubleValue();
     if (f == "pct") return (float) (v / 100);
     if (f == "hz") return (float) (t.contains("k") ? v * 1000 : v);
-    if (f == "time") return (float) (t.endsWith("ms") ? v / 1000 : (t.endsWith("s") ? v : (v > 10 ? v / 1000 : v)));
+    if (f == "tail" && t.startsWithIgnoreCase("auto")) return 0.f;
+    if (f == "time" || f == "tail") return (float) (t.endsWith("ms") ? v / 1000 : (t.endsWith("s") ? v : (v > 10 ? v / 1000 : v)));
     return (float) v;
 }

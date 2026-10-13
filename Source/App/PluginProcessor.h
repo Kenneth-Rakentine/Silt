@@ -50,6 +50,9 @@ public:
     juce::MidiKeyboardState keyboardState;
     std::atomic<float> abTrim { 1.f };
     std::atomic<bool> panicRequest { false };
+    enum Action { A_CATCH = 1, A_REC = 2, A_CLEAR = 4, A_SEDCLEAR = 8, A_ERORESTORE = 16 };
+    std::atomic<int> actions { 0 };
+    void act(Action a) { actions.fetch_or(a); }
     std::atomic<float> meterRms { 0.f };
     std::atomic<int> activeVoices { 0 };
     static constexpr int kRing = 16384;

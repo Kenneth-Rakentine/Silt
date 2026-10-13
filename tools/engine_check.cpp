@@ -12,8 +12,8 @@ int main(int argc, char** argv) {
     silt::Params P; silt::StateSet S {}; struct Ev { double t; int on, n; float v; }; std::vector<Ev> evs;
     while (std::getline(in, line)) {
         std::istringstream ss(line); std::string tag; ss >> tag;
-        if (tag == "case") { ss >> ci; P = silt::Params(); P.b.on = 0; P.b.lvl = 0.6f; evs.clear(); }
-        else if (tag == "p") { std::string k; float v; ss >> k >> v; if (float* f = silt::paramField(P, k.c_str())) *f = v; else std::fprintf(stderr, "unknown %s\n", k.c_str()); }
+        if (tag == "case") { ss >> ci; P = silt::defaultParams(); evs.clear(); }
+        else if (tag == "p") { std::string k; float v; ss >> k >> v; if (float* f = silt::paramField(P, k)) *f = v; else std::fprintf(stderr, "unknown %s\n", k.c_str()); }
         else if (tag == "s") { int st, k; float v; ss >> st >> k >> v; S[st][k] = v; }
         else if (tag == "e") { Ev e; ss >> e.t >> e.on >> e.n >> e.v; evs.push_back(e); }
         else if (tag == "end") {

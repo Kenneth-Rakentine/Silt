@@ -1,6 +1,11 @@
 // Silt sound engine (C++ port of the browser lab engine). No framework dependencies.
 #pragma once
 #include "SiltParams.h"
+#include "ParamTable.h"
+#include "Movement.h"
+#include "Feedback.h"
+#include "Memory.h"
+#include "../Catch/CatchSection.h"
 #include <vector>
 #include <cstdint>
 #include <cmath>
@@ -52,6 +57,9 @@ struct Voice {
     Up upL, upR; Down dnL, dnR; double lad[2][4] {}; SVF svf[2];
     double g0 = 0.1, g1 = 0.1, lv0 = 0, lv1 = 0, hL = 0, hR = 0, bPrev = 0; int hc = 0;
     double dP = 0, dC = 0, dPv = 0, dCv = 0, fold = 0, res = 0, ring = 0, fbs = 0;
+    float vrand = 0;                 // per-note random, a mod source
+    Params pm;                       // this voice's parameters after modulation
+    double stOff[NK] {};             // modulation added to the articulation fields
 };
 
 struct Drop { bool on = false; double ph = 0, f0 = 0, ch = 0, t = 0, tc = 0, td = 0, a = 0, pl = 0, pr = 0; };
@@ -59,7 +67,8 @@ struct Line { std::vector<float> buf; int w = 0, len = 0; double base = 0, lp = 
 struct AP { std::vector<float> b; int i = 0; };
 
 // Snapshot for displays (read by the UI thread; tearing is harmless).
-struct VizSnapshot { bool on = false; int N = 1; float th[MAXE] {}; float e[MAXE] {}; float R = 0; int stage = 0; float f0 = 0, ff = 0; float cur[NK] {}; int voices = 0; };
+struct VizSnapshot { int seqStep[NHEAD] { -1, -1 }; float clockEnv = 0, sediment = 0, erosion = 0, catchLevel = 0, catchLoop = 0; bool catchRec = false;
+    float src[MS_COUNT] {}; float prog = 0; int note = -1; bool on = false; int N = 1; float th[MAXE] {}; float e[MAXE] {}; float R = 0; int stage = 0; float f0 = 0, ff = 0; float cur[NK] {}; int voices = 0; };
 
 class Engine {
 public:
@@ -67,7 +76,17 @@ public:
     void prepare(double sampleRate);
     void noteOn(int note, float vel);
     void noteOff(int note);
+    // Keys from the player (MIDI or computer keys): the sequencer may take them as transposition.
+    void keyOn(int note, float vel);
+    void keyOff(int note);
+    void setModWheel(float v) { wheel = v; }
     void panic();
+    // actions from the panel
+    void catchNow() { if (P) catchSec.catchNow(*P); }
+    void catchRecord() { catchSec.toggleRecord(); }
+    void catchClear() { catchSec.clear(); }
+    void sedimentClear() { sed.clear(); }
+    void erosionRestore() { sed.restore(); }
     // Sets parameters and states without rendering (call before note events in a block).
     void setControls(const Params& P, const StateSet& S);
     // Renders n samples. tap (optional) receives the scope signal.
@@ -76,6 +95,8 @@ public:
     float meterRms = 0; int activeVoices = 0;
 private:
     void renderChunk(int n, float* L, float* R, float* tap);
+    void applyMods(Params& out, const float* src, double* stateOff) const;
+    bool anyMods() const;
     void ctrlLayer(Voice& v, Layer& L, const LayerParams& lp, double f0, double dt);
     void ctrlVoice(Voice& v, double dt);
     void layerSample(Layer& L, double pm, bool syncIn, bool& emitted0);
@@ -90,8 +111,22 @@ private:
     const Params* P = nullptr; double Sc[3][NK] {}; // states in engine units (cutoff as log2 Hz)
     float bL[CHUNK] {}, bR[CHUNK] {}, fbB[CHUNK] {}, t1L[CHUNK] {}, t1R[CHUNK] {}, t2L[CHUNK] {}, t2R[CHUNK] {}, vt[CHUNK] {};
     double mask_ = 0, scat_ = 0;
-    // feedback
-    std::vector<float> dbuf; int dlen = 0, dw = 0; double dtS = 0; SVF fbF; double dcx = 0, dcy = 0;
+    const Params* base = nullptr;   // unmodulated parameters for this block
+    Params Pg;                      // globally modulated parameters (feedback, memory, vocoder, space, catch)
+    float src[MS_COUNT] {};         // global modulation source values
+    // movement
+    Clock clock; ModLfo lfo1, lfo2; DustMod dmod; Sequencer seq; MRng mrng;
+    int root = 48, notesThisChunk = 0; float wheel = 0;
+    // feedback network
+    FbBus bus[NBUS]; double busPrev[NBUS] {}; float excCur[CHUNK] {}, excNext[CHUNK] {};
+    double prevWet = 0, prevSpace = 0, prevOut = 0;
+    // memory
+    Sediment sed; RegenBuffer regen; Microcuts cuts; double outEnergy = 0;
+    // catch
+    CatchSection catchSec;
+    // per-chunk listen buffers
+    float cL[CHUNK] {}, cR[CHUNK] {}, lsWL[CHUNK] {}, lsWR[CHUNK] {}, lsFL[CHUNK] {}, lsFR[CHUNK] {}, lsSL[CHUNK] {}, lsSR[CHUNK] {},
+          lsML[CHUNK] {}, lsMR[CHUNK] {}, lsCL[CHUNK] {}, lsCR[CHUNK] {}, lsDC[CHUNK] {}, ctL[CHUNK] {}, ctR[CHUNK] {};
     // vocoder
     SVF anS[8], syL[8], syR[8]; double env[8] {}; double scr = 0, vDry = 1e-4, vWet = 1e-4, vGain = 1;
     SVF dustL[2], dustR[2], popL, popR; Drop drops[14];

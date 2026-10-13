@@ -43,12 +43,13 @@ public:
 
 class Panel : public juce::Component {
 public:
-    Panel(const juce::String& title, juce::Colour tint = col::accent) : title(title), tint(tint) {}
+    Panel(const juce::String& t, juce::Colour c = col::accent) : title(t), tint(c) {}
     void paint(juce::Graphics&) override;
     void resized() override;
     int preferredHeight() const;
     Row& add(juce::AudioProcessorValueTreeState& s, const juce::String& id, const juce::String& label);
     void addExtra(juce::Component* c, int height) { extras.push_back({ c, height }); addAndMakeVisible(c); }
+    void clearRows() { rows.clear(); }
     juce::String title; juce::Colour tint;
     std::vector<std::unique_ptr<Row>> rows;
     std::vector<std::pair<juce::Component*, int>> extras;
@@ -87,6 +88,69 @@ private:
     int tick = 0;
 };
 
+// The articulation drawn as a path through its states, with the playing voice moving along it.
+class ArticulationView : public juce::Component, public juce::SettableTooltipClient {
+public:
+    explicit ArticulationView(SiltProcessor& p);
+    void paint(juce::Graphics&) override;
+    void resized() override;
+    void update(const silt::VizSnapshot& v);
+private:
+    float raw(const juce::String& id) const { return proc.apvts.getRawParameterValue(id)->load(); }
+    SiltProcessor& proc;
+    juce::ComboBox field;
+    struct Pt { float x, lv, cut, fd; };
+    std::vector<Pt> trail; int lastNote = -1, lastStage = -1; float lastX = 0;
+    silt::VizSnapshot viz;
+};
+
+// Small live meter: a label and a bar.
+class Meter : public juce::Component {
+public:
+    Meter(const juce::String& name, std::function<float()> value, juce::Colour c = col::trace) : name(name), get(std::move(value)), colour(c) {}
+    void paint(juce::Graphics&) override;
+    juce::String name; std::function<float()> get; juce::Colour colour; std::function<juce::String()> text;
+};
+
+// A row of action buttons.
+class ButtonBar : public juce::Component {
+public:
+    void addButton(const juce::String& text, std::function<void()> fn);
+    void resized() override;
+    juce::OwnedArray<juce::TextButton> buttons;
+};
+
+// Mod matrix slot: source, destination, amount, with the source's live value.
+class ModRow : public juce::Component {
+public:
+    ModRow(SiltProcessor& p, int slot);
+    void resized() override;
+    void paint(juce::Graphics&) override;
+    SiltProcessor& proc; int slot; float live = 0;
+    juce::ComboBox src, dst; juce::Slider amt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> sAtt, dAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> aAtt;
+};
+
+// The graph sequencer: steps on a ring, cords between them, playheads moving through.
+class SeqGraph : public juce::Component {
+public:
+    explicit SeqGraph(SiltProcessor& p) : proc(p) {}
+    void paint(juce::Graphics&) override;
+    void mouseDown(const juce::MouseEvent&) override;
+    void mouseDrag(const juce::MouseEvent&) override;
+    void mouseUp(const juce::MouseEvent&) override;
+    void mouseDoubleClick(const juce::MouseEvent&) override;
+    std::function<void(int)> onSelect;
+    int selected = 0, heads[2] { -1, -1 };
+private:
+    juce::Point<float> node(int i) const;
+    int hit(juce::Point<float> p) const;
+    float raw(const juce::String& id) const { return proc.apvts.getRawParameterValue(id)->load(); }
+    void set(const juce::String& id, float v);
+    SiltProcessor& proc; int dragFrom = -1; juce::Point<float> dragPos; bool dragging = false;
+};
+
 class Notes : public juce::Component {
 public:
     void set(const juce::var& notes);
@@ -111,6 +175,8 @@ private:
     void timerCallback() override;
     void buildPanels();
     void layoutPanels();
+    void showTab(int t);
+    void selectStep(int i);
     void refreshPatchMenu();
     void onPatchChosen();
     void afterPatchLoad();
@@ -147,12 +213,21 @@ private:
     juce::Label abNote;
     ui::Notes notes;
 
-    // panels
+    // panels, one page per tab
+    static constexpr int kTabs = 5;
+    juce::TextButton tabBtn[kTabs];
     juce::Viewport viewport;
-    juce::Component content;
-    std::vector<std::unique_ptr<ui::Panel>> panels;
+    juce::Component content[kTabs];
+    std::vector<std::unique_ptr<ui::Panel>> panels[kTabs];
+    int tab = 0;
     std::unique_ptr<ui::Bands> bands;
+    std::unique_ptr<ui::ArticulationView> artView;
+    std::unique_ptr<ui::SeqGraph> graph;
+    ui::Panel* stepPanel = nullptr;
+    std::vector<std::unique_ptr<juce::Component>> extras;
+    std::vector<ui::ModRow*> modRows;
     ui::Row* posRows[2] { nullptr, nullptr };
+    juce::TooltipWindow tooltips { this, 600 };
 
     // keyboard
     juce::MidiKeyboardComponent keyboard;

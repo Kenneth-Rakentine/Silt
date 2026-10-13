@@ -24,6 +24,16 @@ To use it in a DAW instead, copy `Silt.vst3` into `C:\Program Files\Common Files
 
 The computer keys work wherever you last clicked, except while you are typing a value or a patch name.
 
+## The pages
+
+- **Voice**: the two particle layers, the articulation (with a live picture of the path the sound takes and what the voice actually does), the three states, the filter with its Cutoff knob, macros, the material vocoder and the space.
+- **Feedback**: three feedback buses. Each taps somewhere (the voices' feedback send, a point in the voice, the vocoder, the space, another bus or the output), runs through a delay, a filter and an insert (comb, smear, frequency shift, fold or crush), and returns to the mix, back into the voices, or both. Edge guard holds a loop just under runaway.
+- **Memory**: sediment (a slow level that remembers playing, usable as a mod source), erosion (playing wears the sound down: highs, density or body), a regeneration buffer (a long audio memory that degrades each pass and is stirred back up by playing) and microcuts (slivers of the output looped, reversed and stuttered, Jelinek-style).
+- **Movement**: the two-oscillator master clock, two LFOs and dust, the graph sequencer (drag between steps to patch cords; two playheads with traversal shapes) and a 12-slot mod matrix that can reach any knob or articulation field.
+- **Catch**: the Nebulae v2.0 build 2 engine, routed as bypass, insert, send or catch (always listening; the Catch button grabs the last few seconds and loops them).
+
+Hover any control for a description.
+
 ## The listening bench
 
 - **Patches**: the menu holds the numbered test patches from the lab, each with notes on what it targets, what to listen for and what to try. Your own patches live in `Documents\Silt\Patches`.
@@ -38,8 +48,9 @@ The computer keys work wherever you last clicked, except while you are typing a 
 | Path | What it is |
 | --- | --- |
 | `Source/Engine` | The sound engine in plain C++ with no framework, so it can move to the hardware unchanged |
+| `Source/Catch` | The Nebulae v2.0 build 2 engine (MIT, see `LICENSE-nebulae`) with a Silt wrapper |
 | `Source/App` | The JUCE app: parameters, patches, recording, editor |
-| `lab/` | The browser lab (`engine.js` is the reference the C++ engine was ported from). `python3 build.py` in that folder writes `silt-lab.html` |
+| `lab/` | The browser lab: the v2 voice the C++ engine was ported from, and the patch list (`patches.js`) both share. The newer sections exist only in the app. `python3 build.py` in that folder writes `silt-lab.html` |
 | `tools/` | `gen_patches.js` regenerates the app's patch list from `lab/patches.js`; `dump_cases.js`, `engine_check.cpp` and `app_check.cpp` render the same notes through both engines for comparison |
 | `.github/workflows` | The Windows build |
 
@@ -59,6 +70,7 @@ node tools/dump_cases.js cmp
 cmake --build build --target silt_engine_check silt_app_check
 build/silt_engine_check cmp      # writes cmp/cpp*.f32
 build/silt_app_check_artefacts/Release/silt_app_check cmp   # writes cmp/app*.f32
+cmake --build build --target silt_feature_check && build/silt_feature_check   # newer sections and a 40-patch fuzz
 ```
 
 The cases are the nine lab patches played as a held chord (or the transient pattern). The RNG differs between engines, so compare levels and spectra rather than samples. At the time of the port every patch matched the lab within 0.3 dB RMS, and octave-band spectra matched within about 1 dB except where the patch is random by design (droplets, strike noise, drift beating).
