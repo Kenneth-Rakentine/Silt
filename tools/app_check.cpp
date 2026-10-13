@@ -4,7 +4,7 @@
 int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI init;
     const juce::String dir = argc > 1 ? argv[1] : "cmp";
-    for (int pi = 0; pi < 9; ++pi) {
+    for (int pi = 0; pi < 10; ++pi) {
         SiltProcessor p;
         p.setCurrentProgram(pi);
         p.prepareToPlay(48000, 128);
