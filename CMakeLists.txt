@@ -17,16 +17,16 @@ else()
 endif()
 
 juce_add_plugin(Silt
-    COMPANY_NAME "Kenneth Rakentine"
+    COMPANY_NAME "Silt"
     PRODUCT_NAME "Silt"
-    BUNDLE_ID "com.kennethrakentine.silt"
+    BUNDLE_ID "com.silt.synth"
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     COPY_PLUGIN_AFTER_BUILD FALSE
-    PLUGIN_MANUFACTURER_CODE Krak
+    PLUGIN_MANUFACTURER_CODE Sltx
     PLUGIN_CODE Silt
     FORMATS Standalone VST3)
 
